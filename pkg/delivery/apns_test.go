@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
 	"github.com/stretchr/testify/require"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
@@ -80,4 +81,59 @@ func Test_ApnsDelivery_BuildNotification_V4TopicBytesB64(t *testing.T) {
 	require.Equal(t, deliveryTestTopic, p["topic"])
 	require.Equal(t, req.TopicBytesB64, p["topicBytesB64"])
 	require.Equal(t, "v4", p["payloadFormat"])
+}
+
+func Test_ApnsDelivery_BuildNotification_AlertHeaders(t *testing.T) {
+	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+
+	notification := a.buildNotification(req)
+	require.Equal(t, apns2.PushTypeAlert, notification.PushType)
+	require.Equal(t, apns2.PriorityHigh, notification.Priority)
+
+	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
+	require.NoError(t, err)
+
+	var p map[string]interface{}
+	require.NoError(t, json.Unmarshal(payloadBytes, &p))
+	aps := p["aps"].(map[string]interface{})
+	require.Equal(t, float64(1), aps["mutable-content"])
+	require.Equal(t, "New message from XMTP", aps["alert"])
+	require.NotContains(t, aps, "content-available")
+}
+
+func Test_ApnsDelivery_BuildNotification_SilentHeaders(t *testing.T) {
+	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+	req.Subscription.IsSilent = true
+
+	notification := a.buildNotification(req)
+	require.Equal(t, apns2.PushTypeBackground, notification.PushType)
+	require.Equal(t, apns2.PriorityLow, notification.Priority)
+
+	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
+	require.NoError(t, err)
+
+	var p map[string]interface{}
+	require.NoError(t, json.Unmarshal(payloadBytes, &p))
+	aps := p["aps"].(map[string]interface{})
+	require.Equal(t, float64(1), aps["content-available"])
+	require.NotContains(t, aps, "mutable-content")
+	require.NotContains(t, aps, "alert")
+}
+
+func Test_ApnsResponseError(t *testing.T) {
+	require.NoError(t, apnsResponseError(nil))
+	require.NoError(t, apnsResponseError(&apns2.Response{StatusCode: apns2.StatusSent}))
+
+	err := apnsResponseError(&apns2.Response{
+		StatusCode: 400,
+		Reason:     apns2.ReasonBadPriority,
+		ApnsID:     "test-apns-id",
+	})
+	require.EqualError(
+		t,
+		err,
+		"APNS rejected notification: status=400 reason=BadPriority apns_id=test-apns-id",
+	)
 }

@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -72,7 +73,11 @@ func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 		)
 	}
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	return apnsResponseError(res)
 }
 
 func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notification {
@@ -86,8 +91,12 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 		notificationPayload = notificationPayload.Custom("topicBytesB64", req.TopicBytesB64)
 	}
 
+	pushType := apns2.PushTypeAlert
+	priority := apns2.PriorityHigh
 	if req.Subscription.IsSilent {
 		notificationPayload = notificationPayload.ContentAvailable()
+		pushType = apns2.PushTypeBackground
+		priority = apns2.PriorityLow
 	} else {
 		notificationPayload = notificationPayload.
 			Alert("New message from XMTP").
@@ -98,7 +107,22 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 		DeviceToken: req.Installation.DeliveryMechanism.Token,
 		Topic:       a.opts.Topic,
 		Payload:     notificationPayload,
+		PushType:    pushType,
+		Priority:    priority,
 	}
+}
+
+func apnsResponseError(res *apns2.Response) error {
+	if res == nil || res.Sent() {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"APNS rejected notification: status=%d reason=%s apns_id=%s",
+		res.StatusCode,
+		res.Reason,
+		res.ApnsID,
+	)
 }
 
 func getApnsClient(authKey []byte, keyId, teamId string) (*apns2.Client, error) {
