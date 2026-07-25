@@ -77,6 +77,7 @@ Worker Options:
 APNS Options:
       --apns-enabled                       Enable APNS [$APNS_ENABLED]
       --apns-p8-certificate=               .p8 certificate data for APNS [$APNS_P8_CERTIFICATE]
+      --apns-p8-certificate-base64=        Base64-encoded .p8 certificate data for APNS [$APNS_P8_CERTIFICATE_BASE64]
       --apns-p8-certificate-file-path=     .p8 certificate file for APNS [$APNS_P8_CERTIFICATE_FILE_PATH]
       --apns-key-id=                       Key ID associated with APNS credentials [$APNS_KEY_ID]
       --apns-team-id=                      APNS Team ID [$APNS_TEAM_ID]

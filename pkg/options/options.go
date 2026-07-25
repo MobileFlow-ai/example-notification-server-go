@@ -8,6 +8,7 @@ type ApiOptions struct {
 type ApnsOptions struct {
 	Enabled               bool   `long:"apns-enabled" env:"APNS_ENABLED" description:"Enable APNS"`
 	P8Certificate         string `long:"apns-p8-certificate" env:"APNS_P8_CERTIFICATE" description:".p8 certificate data for APNS"`
+	P8CertificateBase64   string `long:"apns-p8-certificate-base64" env:"APNS_P8_CERTIFICATE_BASE64" description:"Base64-encoded .p8 certificate data for APNS"`
 	P8CertificateFilePath string `long:"apns-p8-certificate-file-path" env:"APNS_P8_CERTIFICATE_FILE_PATH" description:".p8 certificate file for APNS"`
 	KeyId                 string `long:"apns-key-id" env:"APNS_KEY_ID" description:"Key ID associated with APNS credentials"`
 	TeamId                string `long:"apns-team-id" env:"APNS_TEAM_ID" description:"APNS Team ID"`

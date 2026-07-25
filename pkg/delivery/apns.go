@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -22,17 +23,9 @@ type ApnsDelivery struct {
 }
 
 func NewApnsDelivery(logger *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, error) {
-	var bytes []byte
-	var err error
-
-	if opts.P8Certificate == "" {
-		bytes, err = os.ReadFile(opts.P8CertificateFilePath)
-
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		bytes = []byte(strings.ReplaceAll(opts.P8Certificate, "\\n", "\n"))
+	bytes, err := loadApnsCertificate(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	client, err := getApnsClient(bytes, opts.KeyId, opts.TeamId)
@@ -54,6 +47,25 @@ func NewApnsDelivery(logger *zap.Logger, opts options.ApnsOptions) (*ApnsDeliver
 		apnsClient: client,
 		opts:       opts,
 	}, nil
+}
+
+func loadApnsCertificate(opts options.ApnsOptions) ([]byte, error) {
+	switch {
+	case opts.P8Certificate != "":
+		return []byte(strings.ReplaceAll(opts.P8Certificate, "\\n", "\n")), nil
+	case opts.P8CertificateBase64 != "":
+		bytes, err := base64.StdEncoding.DecodeString(
+			strings.TrimSpace(opts.P8CertificateBase64),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("decode APNS .p8 certificate base64: %w", err)
+		}
+		return bytes, nil
+	case opts.P8CertificateFilePath != "":
+		return os.ReadFile(opts.P8CertificateFilePath)
+	default:
+		return nil, errors.New("APNS .p8 certificate is not configured")
+	}
 }
 
 func (a ApnsDelivery) CanDeliver(req interfaces.SendRequest) bool {

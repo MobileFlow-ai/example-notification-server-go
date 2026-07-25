@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -136,4 +137,36 @@ func Test_ApnsResponseError(t *testing.T) {
 		err,
 		"APNS rejected notification: status=400 reason=BadPriority apns_id=test-apns-id",
 	)
+}
+
+func Test_LoadApnsCertificate(t *testing.T) {
+	t.Run("raw escaped newlines", func(t *testing.T) {
+		got, err := loadApnsCertificate(options.ApnsOptions{
+			P8Certificate: "line-1\\nline-2",
+		})
+		require.NoError(t, err)
+		require.Equal(t, []byte("line-1\nline-2"), got)
+	})
+
+	t.Run("base64", func(t *testing.T) {
+		got, err := loadApnsCertificate(options.ApnsOptions{
+			P8CertificateBase64: base64.StdEncoding.EncodeToString(
+				[]byte("test-p8"),
+			),
+		})
+		require.NoError(t, err)
+		require.Equal(t, []byte("test-p8"), got)
+	})
+
+	t.Run("invalid base64", func(t *testing.T) {
+		_, err := loadApnsCertificate(options.ApnsOptions{
+			P8CertificateBase64: "not-valid-base64!",
+		})
+		require.ErrorContains(t, err, "decode APNS .p8 certificate base64")
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		_, err := loadApnsCertificate(options.ApnsOptions{})
+		require.EqualError(t, err, "APNS .p8 certificate is not configured")
+	})
 }
