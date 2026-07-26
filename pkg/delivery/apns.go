@@ -13,6 +13,7 @@ import (
 	"github.com/sideshow/apns2/token"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
+	"github.com/xmtp/example-notification-server-go/pkg/topics"
 	"go.uber.org/zap"
 )
 
@@ -95,9 +96,19 @@ func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notification {
 	notificationPayload := payload.NewPayload().
 		Custom("topic", req.Topic).
-		Custom("encryptedMessage", req.EncryptedMessage).
 		Custom("messageKind", string(req.MessageContext.MessageType)).
 		Custom("payloadFormat", req.PayloadFormat.String())
+
+	// MLS welcome envelopes routinely exceed APNs' 4 KiB payload limit. The
+	// welcome topic itself is enough to wake the NSE, which then syncs and
+	// processes the welcome from XMTP. Conversation envelopes remain inline so
+	// the NSE can decrypt and render them without an extra network read.
+	if req.MessageContext.MessageType != topics.V3Welcome {
+		notificationPayload = notificationPayload.Custom(
+			"encryptedMessage",
+			req.EncryptedMessage,
+		)
+	}
 
 	if req.TopicBytesB64 != "" {
 		notificationPayload = notificationPayload.Custom("topicBytesB64", req.TopicBytesB64)

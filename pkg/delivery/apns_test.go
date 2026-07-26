@@ -69,6 +69,36 @@ func Test_ApnsDelivery_BuildNotification_TopicField(t *testing.T) {
 	require.Equal(t, "com.example.app", notification.Topic)
 }
 
+func Test_ApnsDelivery_BuildNotification_WelcomeOmitsEncryptedMessage(t *testing.T) {
+	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+	req.MessageContext.MessageType = topics.V3Welcome
+	req.EncryptedMessage = make([]byte, 8_192)
+
+	notification := a.buildNotification(req)
+	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
+	require.NoError(t, err)
+
+	var p map[string]interface{}
+	require.NoError(t, json.Unmarshal(payloadBytes, &p))
+	require.Equal(t, string(topics.V3Welcome), p["messageKind"])
+	require.NotContains(t, p, "encryptedMessage")
+	require.Less(t, len(payloadBytes), 4_096)
+}
+
+func Test_ApnsDelivery_BuildNotification_ConversationIncludesEncryptedMessage(t *testing.T) {
+	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+
+	notification := a.buildNotification(req)
+	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
+	require.NoError(t, err)
+
+	var p map[string]interface{}
+	require.NoError(t, json.Unmarshal(payloadBytes, &p))
+	require.Equal(t, "dGVzdA==", p["encryptedMessage"])
+}
+
 func Test_ApnsDelivery_BuildNotification_V4TopicBytesB64(t *testing.T) {
 	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV4)
