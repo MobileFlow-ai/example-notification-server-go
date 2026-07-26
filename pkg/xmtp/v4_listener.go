@@ -182,7 +182,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 	targetTopic := clientEnvelope.TargetTopic()
 	thirtyDayPeriod := int(origEnv.OriginatorNs() / 1_000_000_000 / 60 / 60 / 24 / 30)
 
-	logger := l.logger.With(zap.String("topic", targetTopic.String()), zap.Uint32("node_id", origEnv.OriginatorNodeID()), zap.Uint64("sequence_id", origEnv.OriginatorSequenceID()))
+	logger := l.logger.With(zap.Uint32("node_id", origEnv.OriginatorNodeID()), zap.Uint64("sequence_id", origEnv.OriginatorSequenceID()))
 
 	var subs []interfaces.Subscription
 	if subs, err = l.subscriptions.GetSubscriptions(l.ctx, &targetTopic, thirtyDayPeriod); err != nil {
@@ -231,15 +231,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 			continue
 		}
 
-		if !l.dispatcher.shouldDeliver(req.MessageContext, req.Subscription) {
-			logger.Debug("skipping delivery of V4 request",
-				zap.Any("message_context", req.MessageContext),
-				zap.Bool("subscription_has_hmac_key", req.Subscription.HmacKey != nil),
-			)
-			continue
-		}
-		logger.Info("delivering notification")
-		if err = l.dispatcher.deliver(req); err != nil {
+		if err = l.dispatcher.dispatch(req); err != nil {
 			logger.Error("error delivering V4 request", zap.Error(err))
 		}
 	}

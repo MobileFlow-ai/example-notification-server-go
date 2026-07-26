@@ -20,6 +20,8 @@ import (
 	proto "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1"
 	protoconnect "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1/notificationsv1connect"
 	"github.com/xmtp/example-notification-server-go/pkg/testutils"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	topicpkg "github.com/xmtp/xmtpd/pkg/topic"
 )
@@ -184,6 +186,64 @@ func Test_RegisterInstallation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, result.Msg.InstallationId, INSTALLATION_ID)
 	require.Equal(t, result.Msg.ValidUntil, uint64(validUntil.UnixMilli()))
+}
+
+func TestApiLogsRedactRegistrationAndSubscriptionSecrets(t *testing.T) {
+	const (
+		installationID = "sensitive-installation-id"
+		deviceToken    = "sensitive-device-token"
+		rawTopic       = "/xmtp/mls/1/g-feedfacefeedfacefeedfacefeedface/proto"
+		hmacSecret     = "sensitive-hmac-secret"
+	)
+	observedCore, logs := observer.New(zap.DebugLevel)
+	installationsMock := mocks.NewInstallations(t)
+	subscriptionsMock := mocks.NewSubscriptions(t)
+	server := NewApiServer(
+		zap.New(observedCore),
+		options.ApiOptions{},
+		installationsMock,
+		subscriptionsMock,
+		interfaces.ListenerTypeV3,
+	)
+
+	installationsMock.On("Register", mock.Anything, mock.Anything).
+		Return(&interfaces.RegisterResponse{ValidUntil: time.Now()}, nil)
+	_, err := server.RegisterInstallation(
+		t.Context(),
+		connect.NewRequest(&proto.RegisterInstallationRequest{
+			InstallationId: installationID,
+			DeliveryMechanism: &proto.DeliveryMechanism{
+				DeliveryMechanismType: &proto.DeliveryMechanism_ApnsDeviceToken{
+					ApnsDeviceToken: deviceToken,
+				},
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	subscriptionsMock.On("SubscribeWithMetadata", mock.Anything, installationID, mock.Anything).
+		Return(nil)
+	_, err = server.SubscribeWithMetadata(
+		t.Context(),
+		connect.NewRequest(&proto.SubscribeWithMetadataRequest{
+			InstallationId: installationID,
+			Subscriptions: []*proto.Subscription{{
+				Topic: rawTopic,
+				HmacKeys: []*proto.Subscription_HmacKey{{
+					Key: []byte(hmacSecret),
+				}},
+			}},
+		}),
+	)
+	require.NoError(t, err)
+
+	for _, entry := range logs.All() {
+		rendered := fmt.Sprintf("%s %#v", entry.Message, entry.ContextMap())
+		require.NotContains(t, rendered, installationID)
+		require.NotContains(t, rendered, deviceToken)
+		require.NotContains(t, rendered, rawTopic)
+		require.NotContains(t, rendered, hmacSecret)
+	}
 }
 
 func Test_RegisterInstallationError(t *testing.T) {

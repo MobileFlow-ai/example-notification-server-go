@@ -159,7 +159,7 @@ func (l *Listener) startMessageWorkers() {
 			for msg := range l.messageChannel {
 				err = l.processEnvelope(msg)
 				if err != nil {
-					l.logger.Error("error processing envelope", zap.String("v3_topic", msg.ContentTopic), zap.Error(err))
+					l.logger.Error("error processing envelope", zap.Error(err))
 					continue
 				}
 			}
@@ -170,18 +170,18 @@ func (l *Listener) startMessageWorkers() {
 func (l *Listener) processEnvelope(env *v1.Envelope) error {
 	// Fast-path: skip expensive parsing for topics that can't be V3
 	if !strings.HasPrefix(env.ContentTopic, topics.V3_PREFIX) {
-		l.logger.Debug("ignoring message", zap.String("v3_topic", env.ContentTopic))
+		l.logger.Debug("ignoring message with unsupported topic prefix")
 		return nil
 	}
 
 	t, err := topics.ParseV3Topic(env.ContentTopic)
 	if err != nil {
-		l.logger.Warn("ignoring message with unsupported topic format", zap.String("v3_topic", env.ContentTopic))
+		l.logger.Warn("ignoring message with unsupported topic format")
 		//nolint:nilerr
 		return nil
 	}
 
-	logger := l.logger.With(zap.String("topic", t.String()))
+	logger := l.logger
 	subs, err := l.subscriptions.GetSubscriptions(l.ctx, t, getThirtyDayPeriodsFromEpoch(env))
 	if err != nil {
 		return err
@@ -208,14 +208,7 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 
 	sendRequests := buildSendRequests(env, t, installations, subs)
 	for _, request := range sendRequests {
-		if !l.dispatcher.shouldDeliver(request.MessageContext, request.Subscription) {
-			logger.Debug("Skipping delivery of request",
-				zap.Any("message_context", request.MessageContext),
-				zap.Bool("subscription_has_hmac_key", request.Subscription.HmacKey != nil),
-			)
-			continue
-		}
-		if err = l.dispatcher.deliver(request); err != nil {
+		if err = l.dispatcher.dispatch(request); err != nil {
 			logger.Error("error delivering request", zap.Error(err))
 		}
 	}

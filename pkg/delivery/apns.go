@@ -19,8 +19,12 @@ import (
 
 type ApnsDelivery struct {
 	logger     *zap.Logger
-	apnsClient *apns2.Client
+	apnsClient apnsClient
 	opts       options.ApnsOptions
+}
+
+type apnsClient interface {
+	PushWithContext(apns2.Context, *apns2.Notification) (*apns2.Response, error)
 }
 
 func NewApnsDelivery(logger *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, error) {
@@ -74,13 +78,22 @@ func (a ApnsDelivery) CanDeliver(req interfaces.SendRequest) bool {
 }
 
 func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) error {
+	// Defense in depth: the dispatcher is the primary egress gate, but APNS
+	// independently honors an explicit no-push envelope if called directly.
+	if req.MessageContext.ShouldPush != nil && !*req.MessageContext.ShouldPush {
+		a.logger.Debug(
+			"APNS delivery suppressed by envelope policy",
+			zap.String("message_type", string(req.MessageContext.MessageType)),
+		)
+		return nil
+	}
+
 	notification := a.buildNotification(req)
 
 	res, err := a.apnsClient.PushWithContext(ctx, notification)
 	if res != nil {
 		a.logger.Info(
 			"Sent notification",
-			zap.String("apns_id", res.ApnsID),
 			zap.Int("status_code", res.StatusCode),
 			zap.String("reason", res.Reason),
 		)
@@ -141,10 +154,9 @@ func apnsResponseError(res *apns2.Response) error {
 	}
 
 	return fmt.Errorf(
-		"APNS rejected notification: status=%d reason=%s apns_id=%s",
+		"APNS rejected notification: status=%d reason=%s",
 		res.StatusCode,
 		res.Reason,
-		res.ApnsID,
 	)
 }
 

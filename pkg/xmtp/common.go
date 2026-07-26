@@ -49,13 +49,27 @@ func (d *deliveryDispatcher) shouldDeliver(messageContext interfaces.MessageCont
 	return true
 }
 
+// dispatch is the single egress gate for every delivery mechanism. Keeping the
+// should-push check adjacent to the injected delivery services makes it hard for
+// a listener to accidentally bypass the policy when adding a new payload path.
+func (d *deliveryDispatcher) dispatch(req interfaces.SendRequest) error {
+	if !d.shouldDeliver(req.MessageContext, req.Subscription) {
+		d.logger.Debug(
+			"delivery suppressed by envelope policy",
+			zap.String("message_type", string(req.MessageContext.MessageType)),
+		)
+		return nil
+	}
+
+	return d.deliver(req)
+}
+
 func (d *deliveryDispatcher) deliver(req interfaces.SendRequest) error {
 	ctx, cancel := context.WithTimeout(d.ctx, DELIVERY_TIMEOUT)
 	defer cancel()
 	for _, service := range d.deliveryServices {
 		if service.CanDeliver(req) {
 			d.logger.Info("active subscription found. sending message",
-				zap.String("topic", req.Topic),
 				zap.String("message_type", string(req.MessageContext.MessageType)),
 			)
 			return service.Send(ctx, req)

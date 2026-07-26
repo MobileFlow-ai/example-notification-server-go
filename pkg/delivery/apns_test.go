@@ -11,9 +11,22 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	"github.com/xmtp/example-notification-server-go/pkg/topics"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const deliveryTestTopic = "/xmtp/mls/1/g-24ce39d660600b3a98adff3075b6d1f4/proto"
+
+type recordingApnsClient struct {
+	pushCount int
+	response  *apns2.Response
+	err       error
+}
+
+func (c *recordingApnsClient) PushWithContext(_ apns2.Context, _ *apns2.Notification) (*apns2.Response, error) {
+	c.pushCount++
+	return c.response, c.err
+}
 
 func buildDeliveryRequest(t *testing.T, payloadFormat interfaces.PayloadFormat) interfaces.SendRequest {
 	t.Helper()
@@ -165,8 +178,50 @@ func Test_ApnsResponseError(t *testing.T) {
 	require.EqualError(
 		t,
 		err,
-		"APNS rejected notification: status=400 reason=BadPriority apns_id=test-apns-id",
+		"APNS rejected notification: status=400 reason=BadPriority",
 	)
+	require.NotContains(t, err.Error(), "test-apns-id")
+}
+
+func TestApnsDelivery_ShouldPushFalseNeverCallsClient(t *testing.T) {
+	client := &recordingApnsClient{}
+	shouldPush := false
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+	req.MessageContext.ShouldPush = &shouldPush
+	a := ApnsDelivery{
+		logger:     zap.NewNop(),
+		apnsClient: client,
+		opts:       options.ApnsOptions{Topic: "com.example.app"},
+	}
+
+	require.NoError(t, a.Send(t.Context(), req))
+	require.Zero(t, client.pushCount)
+}
+
+func TestApnsDelivery_LogsDoNotContainApnsID(t *testing.T) {
+	const sensitiveApnsID = "sensitive-apns-id"
+	core, logs := observer.New(zap.DebugLevel)
+	client := &recordingApnsClient{
+		response: &apns2.Response{
+			StatusCode: apns2.StatusSent,
+			ApnsID:     sensitiveApnsID,
+		},
+	}
+	a := ApnsDelivery{
+		logger:     zap.New(core),
+		apnsClient: client,
+		opts:       options.ApnsOptions{Topic: "com.example.app"},
+	}
+
+	require.NoError(t, a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3)))
+	require.Equal(t, 1, client.pushCount)
+	for _, entry := range logs.All() {
+		require.NotContains(t, entry.Message, sensitiveApnsID)
+		for _, field := range entry.Context {
+			require.NotEqual(t, "apns_id", field.Key)
+			require.NotContains(t, field.String, sensitiveApnsID)
+		}
+	}
 }
 
 func Test_LoadApnsCertificate(t *testing.T) {

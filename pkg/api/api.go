@@ -107,13 +107,12 @@ func (s *ApiServer) RegisterInstallation(
 	ctx context.Context,
 	req *connect.Request[proto.RegisterInstallationRequest],
 ) (*connect.Response[proto.RegisterInstallationResponse], error) {
-	s.logger.Info("RegisterInstallation", zap.Any("req", req))
+	s.logger.Info("RegisterInstallation")
 
 	mechanism := convertDeliveryMechanism(req.Msg.DeliveryMechanism)
 	if mechanism == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("missing delivery mechanism"))
 	}
-	s.logger.Info("got mechanism", zap.Any("mechanism", mechanism))
 
 	payloadFormat := interfaces.PayloadFormatFromProto(req.Msg.PayloadFormat)
 	payloadFormat = interfaces.NormalizePayloadFormat(payloadFormat)
@@ -133,7 +132,11 @@ func (s *ApiServer) RegisterInstallation(
 		s.logger.Error("error registering installation", zap.Error(err))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.logger.Info("sending response", zap.Any("result", result))
+	s.logger.Info(
+		"installation registered",
+		zap.String("delivery_mechanism", string(mechanism.Kind)),
+		zap.String("payload_format", payloadFormat.String()),
+	)
 	return connect.NewResponse(&proto.RegisterInstallationResponse{
 		InstallationId: req.Msg.InstallationId,
 		ValidUntil:     uint64(result.ValidUntil.UnixMilli()),
@@ -144,7 +147,7 @@ func (s *ApiServer) DeleteInstallation(
 	ctx context.Context,
 	req *connect.Request[proto.DeleteInstallationRequest],
 ) (*connect.Response[emptypb.Empty], error) {
-	s.logger.Info("DeleteInstallation", zap.Any("req", req))
+	s.logger.Info("DeleteInstallation")
 
 	err := s.installations.Delete(ctx, req.Msg.InstallationId)
 	if err != nil {
@@ -159,7 +162,7 @@ func (s *ApiServer) Subscribe(
 	ctx context.Context,
 	req *connect.Request[proto.SubscribeRequest],
 ) (*connect.Response[emptypb.Empty], error) {
-	s.logger.Info("Subscribe", zap.Any("req", req))
+	s.logger.Info("Subscribe")
 
 	topics, err := normalizeTopics(req.Msg.Topics, req.Msg.TopicsBytes)
 	if err != nil {
@@ -179,7 +182,7 @@ func (s *ApiServer) Unsubscribe(
 	ctx context.Context,
 	req *connect.Request[proto.UnsubscribeRequest],
 ) (*connect.Response[emptypb.Empty], error) {
-	s.logger.Info("Unsubscribe", zap.Any("req", req))
+	s.logger.Info("Unsubscribe")
 
 	topics, err := normalizeTopics(req.Msg.Topics, req.Msg.TopicsBytes)
 	if err != nil {
