@@ -137,7 +137,7 @@ type sendRequestJSON struct {
 	IdempotencyKey string `json:"idempotency_key"`
 	Message        struct {
 		ContentTopic string `json:"content_topic"`
-		Message      []byte `json:"message"`
+		Message      []byte `json:"message,omitempty"`
 	} `json:"message"`
 	MessageContext MessageContext `json:"message_context"`
 	Installation   Installation   `json:"installation"`
@@ -156,7 +156,9 @@ func (r SendRequest) MarshalJSON() ([]byte, error) {
 		TopicBytesB64:  r.TopicBytesB64,
 	}
 	out.Message.ContentTopic = r.Topic
-	out.Message.Message = r.EncryptedMessage
+	if r.MessageContext.MessageType != topics.V3Welcome {
+		out.Message.Message = r.EncryptedMessage
+	}
 	return json.Marshal(out)
 }
 

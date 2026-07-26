@@ -14,14 +14,12 @@ import (
 )
 
 type SubscriptionsService struct {
-	logger  *zap.Logger
 	db      *sql.DB
 	queries *queries.Queries
 }
 
-func NewSubscriptionsService(logger *zap.Logger, db *sql.DB) *SubscriptionsService {
+func NewSubscriptionsService(_ *zap.Logger, db *sql.DB) *SubscriptionsService {
 	return &SubscriptionsService{
-		logger:  logger.Named("subscriptions-service"),
 		db:      db,
 		queries: queries.New(db),
 	}
@@ -159,7 +157,6 @@ func (s SubscriptionsService) GetSubscriptions(
 	for _, result := range results {
 		parsedTopic, err := topic.ParseTopic(result.Topic)
 		if err != nil {
-			s.logger.Warn("failed to parse topic from DB", zap.Error(err))
 			continue
 		}
 		subscription := interfaces.Subscription{

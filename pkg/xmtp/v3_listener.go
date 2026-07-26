@@ -62,11 +62,7 @@ func NewListener(
 		subscriptions:  subscriptions,
 		clientVersion:  clientVersion,
 		appVersion:     appVersion,
-		dispatcher: deliveryDispatcher{
-			logger:           namedLogger,
-			ctx:              ctx,
-			deliveryServices: deliveryServices,
-		},
+		dispatcher:     newDeliveryDispatcher(ctx, deliveryServices),
 	}, nil
 }
 
@@ -155,13 +151,8 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 func (l *Listener) startMessageWorkers() {
 	for i := 0; i < l.opts.NumWorkers; i++ {
 		go func() {
-			var err error
 			for msg := range l.messageChannel {
-				err = l.processEnvelope(msg)
-				if err != nil {
-					l.logger.Error("error processing envelope", zap.Error(err))
-					continue
-				}
+				_ = l.processEnvelope(msg)
 			}
 		}()
 	}
@@ -170,18 +161,15 @@ func (l *Listener) startMessageWorkers() {
 func (l *Listener) processEnvelope(env *v1.Envelope) error {
 	// Fast-path: skip expensive parsing for topics that can't be V3
 	if !strings.HasPrefix(env.ContentTopic, topics.V3_PREFIX) {
-		l.logger.Debug("ignoring message with unsupported topic prefix")
 		return nil
 	}
 
 	t, err := topics.ParseV3Topic(env.ContentTopic)
 	if err != nil {
-		l.logger.Warn("ignoring message with unsupported topic format")
 		//nolint:nilerr
 		return nil
 	}
 
-	logger := l.logger
 	subs, err := l.subscriptions.GetSubscriptions(l.ctx, t, getThirtyDayPeriodsFromEpoch(env))
 	if err != nil {
 		return err
@@ -202,17 +190,17 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 	}
 
 	if len(installations) == 0 {
-		logger.Debug("No matching installations found for topic")
 		return nil
 	}
 
 	sendRequests := buildSendRequests(env, t, installations, subs)
+	var firstError error
 	for _, request := range sendRequests {
-		if err = l.dispatcher.dispatch(request); err != nil {
-			logger.Error("error delivering request", zap.Error(err))
+		if err = l.dispatcher.dispatch(request); err != nil && firstError == nil {
+			firstError = err
 		}
 	}
-	return err
+	return firstError
 }
 
 func (l *Listener) refreshClient() error {

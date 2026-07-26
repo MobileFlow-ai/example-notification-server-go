@@ -13,12 +13,12 @@ import (
 	"github.com/sideshow/apns2/token"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
+	"github.com/xmtp/example-notification-server-go/pkg/pushpolicy"
 	"github.com/xmtp/example-notification-server-go/pkg/topics"
 	"go.uber.org/zap"
 )
 
 type ApnsDelivery struct {
-	logger     *zap.Logger
 	apnsClient apnsClient
 	opts       options.ApnsOptions
 }
@@ -27,7 +27,7 @@ type apnsClient interface {
 	PushWithContext(apns2.Context, *apns2.Notification) (*apns2.Response, error)
 }
 
-func NewApnsDelivery(logger *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, error) {
+func NewApnsDelivery(_ *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, error) {
 	bytes, err := loadApnsCertificate(opts)
 	if err != nil {
 		return nil, err
@@ -48,7 +48,6 @@ func NewApnsDelivery(logger *zap.Logger, opts options.ApnsOptions) (*ApnsDeliver
 	}
 
 	return &ApnsDelivery{
-		logger:     logger.Named("delivery-service"),
 		apnsClient: client,
 		opts:       opts,
 	}, nil
@@ -78,27 +77,13 @@ func (a ApnsDelivery) CanDeliver(req interfaces.SendRequest) bool {
 }
 
 func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) error {
-	// Defense in depth: the dispatcher is the primary egress gate, but APNS
-	// independently honors an explicit no-push envelope if called directly.
-	if req.MessageContext.ShouldPush != nil && !*req.MessageContext.ShouldPush {
-		a.logger.Debug(
-			"APNS delivery suppressed by envelope policy",
-			zap.String("message_type", string(req.MessageContext.MessageType)),
-		)
-		return nil
+	if !pushpolicy.AllowsDelivery(ctx, req) {
+		return pushpolicy.ErrUnauthorized
 	}
 
 	notification := a.buildNotification(req)
 
 	res, err := a.apnsClient.PushWithContext(ctx, notification)
-	if res != nil {
-		a.logger.Info(
-			"Sent notification",
-			zap.Int("status_code", res.StatusCode),
-			zap.String("reason", res.Reason),
-		)
-	}
-
 	if err != nil {
 		return err
 	}
@@ -153,11 +138,7 @@ func apnsResponseError(res *apns2.Response) error {
 		return nil
 	}
 
-	return fmt.Errorf(
-		"APNS rejected notification: status=%d reason=%s",
-		res.StatusCode,
-		res.Reason,
-	)
+	return errors.New("APNS rejected notification")
 }
 
 func getApnsClient(authKey []byte, keyId, teamId string) (*apns2.Client, error) {

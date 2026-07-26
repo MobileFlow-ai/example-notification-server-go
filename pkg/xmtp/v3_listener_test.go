@@ -37,11 +37,19 @@ func buildTestListener(t *testing.T, deliveryService interfaces.Delivery) *Liste
 	installations := installations.NewInstallationsService(logger, db)
 	subscriptions := subscriptions.NewSubscriptionsService(logger, db)
 
-	l, err := NewListener(ctx, logger, opts, installations, subscriptions, []interfaces.Delivery{deliveryService}, "test", "test")
+	l, err := NewListener(
+		ctx,
+		logger,
+		opts,
+		installations,
+		subscriptions,
+		[]interfaces.Delivery{deliveryService},
+		"test",
+		"test",
+	)
 	if err != nil {
 		require.NoError(t, err)
 	}
-	l.Start()
 
 	t.Cleanup(func() {
 		cancel()
@@ -51,8 +59,8 @@ func buildTestListener(t *testing.T, deliveryService interfaces.Delivery) *Liste
 	return l
 }
 
-func injectMessage(listener *Listener, topic string, message []byte) {
-	listener.messageChannel <- &v1.Envelope{
+func testEnvelope(topic string, message []byte) *v1.Envelope {
+	return &v1.Envelope{
 		ContentTopic: topic,
 		Message:      message,
 		TimestampNs:  uint64(time.Now().UnixNano()),
@@ -76,22 +84,15 @@ func subscribeToTopic(t *testing.T, l *Listener, installationId, topicStr string
 	require.NoError(t, err)
 }
 
-func Test_BasicDelivery(t *testing.T) {
-	mockDeliveryService, sendCount := testutils.MockDeliveryWithSendCounter(t)
+func Test_UncorrelatedWelcomeFailsClosed(t *testing.T) {
+	mockDeliveryService := mocks.NewDelivery(t)
 	l := buildTestListener(t, mockDeliveryService)
 
 	subscribeToTopic(t, l, INSTALLATION_ID, TEST_TOPIC, false)
-	injectMessage(l, TEST_TOPIC, []byte("test"))
-	testutils.RequireEventuallySendCount(t, sendCount, 1)
+	require.NoError(t, l.processEnvelope(testEnvelope(TEST_TOPIC, []byte("test"))))
 
-	mockDeliveryService.AssertCalled(t, "CanDeliver", mock.Anything)
-	mockDeliveryService.AssertNumberOfCalls(t, "Send", 1)
-
-	sendReqs := testutils.GetSendRequests(mockDeliveryService)
-	require.Len(t, sendReqs, 1)
-	require.Equal(t, INSTALLATION_ID, sendReqs[0].Installation.Id)
-	require.Equal(t, TEST_TOPIC, sendReqs[0].Topic)
-	require.Equal(t, topics.V3Welcome, sendReqs[0].MessageContext.MessageType)
+	mockDeliveryService.AssertNotCalled(t, "CanDeliver", mock.Anything)
+	mockDeliveryService.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
 }
 
 func Test_MultipleDeliveries(t *testing.T) {
@@ -113,11 +114,14 @@ func Test_MultipleDeliveries(t *testing.T) {
 		Once().
 		Return(nil)
 
-	subscribeToTopic(t, l, INSTALLATION_ID, TEST_TOPIC, false)
-	subscribeToTopic(t, l, INSTALLATION_ID_2, TEST_TOPIC, false)
+	rawFixture := getRawFixture(t, "v3-conversation")
+	envelope := getEnvelope(t, rawFixture)
 
-	injectMessage(l, TEST_TOPIC, []byte("test"))
-	testutils.RequireEventuallySendCount(t, &sendCount, 2)
+	subscribeToTopic(t, l, INSTALLATION_ID, envelope.ContentTopic, false)
+	subscribeToTopic(t, l, INSTALLATION_ID_2, envelope.ContentTopic, false)
+
+	require.EqualError(t, l.processEnvelope(envelope), "failed")
+	require.Equal(t, int32(2), sendCount.Load())
 
 	mockDeliveryService.AssertCalled(t, "CanDeliver", mock.Anything)
 	mockDeliveryService.AssertNumberOfCalls(t, "Send", 2)
@@ -128,8 +132,8 @@ func Test_MultipleDeliveries(t *testing.T) {
 		sendReqs[0].Installation.Id,
 		sendReqs[1].Installation.Id,
 	})
-	require.Equal(t, TEST_TOPIC, sendReqs[0].Topic)
-	require.Equal(t, TEST_TOPIC, sendReqs[1].Topic)
+	require.Equal(t, envelope.ContentTopic, sendReqs[0].Topic)
+	require.Equal(t, envelope.ContentTopic, sendReqs[1].Topic)
 }
 
 type subscribeAllOnlyMessageAPIClient struct {

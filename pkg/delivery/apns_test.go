@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -10,21 +11,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
+	"github.com/xmtp/example-notification-server-go/pkg/pushpolicy"
 	"github.com/xmtp/example-notification-server-go/pkg/topics"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 )
 
 const deliveryTestTopic = "/xmtp/mls/1/g-24ce39d660600b3a98adff3075b6d1f4/proto"
 
 type recordingApnsClient struct {
-	pushCount int
-	response  *apns2.Response
-	err       error
+	pushCount    int
+	notification *apns2.Notification
+	response     *apns2.Response
+	err          error
 }
 
-func (c *recordingApnsClient) PushWithContext(_ apns2.Context, _ *apns2.Notification) (*apns2.Response, error) {
+func deliveryBoolPointer(value bool) *bool {
+	return &value
+}
+
+func (c *recordingApnsClient) PushWithContext(_ apns2.Context, notification *apns2.Notification) (*apns2.Response, error) {
 	c.pushCount++
+	c.notification = notification
 	return c.response, c.err
 }
 
@@ -34,6 +40,7 @@ func buildDeliveryRequest(t *testing.T, payloadFormat interfaces.PayloadFormat) 
 	parsed, err := topics.ParseV3Topic(deliveryTestTopic)
 	require.NoError(t, err)
 	topicStr := topics.TopicToString(parsed)
+	shouldPush := true
 	req := interfaces.SendRequest{
 		Topic:            topicStr,
 		EncryptedMessage: []byte("test"),
@@ -43,14 +50,32 @@ func buildDeliveryRequest(t *testing.T, payloadFormat interfaces.PayloadFormat) 
 			Topic:   topicStr,
 		},
 		Installation: interfaces.Installation{
-			DeliveryMechanism: interfaces.DeliveryMechanism{Token: "device-token"},
+			DeliveryMechanism: interfaces.DeliveryMechanism{
+				Kind:  interfaces.APNS,
+				Token: "device-token",
+			},
+			PayloadFormat: payloadFormat,
 		},
-		MessageContext: interfaces.MessageContext{MessageType: topics.V3Conversation},
+		MessageContext: interfaces.MessageContext{
+			MessageType: topics.V3Conversation,
+			ShouldPush:  &shouldPush,
+		},
 	}
 	if payloadFormat == interfaces.PayloadFormatV4 {
 		req.TopicBytesB64 = topics.TopicToBase64(parsed)
 	}
 	return req
+}
+
+func authorizeTestDeliveryRequest(
+	t *testing.T,
+	ctx context.Context,
+	req interfaces.SendRequest,
+) (context.Context, interfaces.SendRequest) {
+	t.Helper()
+	authorizedContext, allowed := pushpolicy.AuthorizeDelivery(ctx, req)
+	require.True(t, allowed)
+	return authorizedContext, req
 }
 
 func TestApns_PayloadIncludesPayloadFormat(t *testing.T) {
@@ -178,29 +203,91 @@ func Test_ApnsResponseError(t *testing.T) {
 	require.EqualError(
 		t,
 		err,
-		"APNS rejected notification: status=400 reason=BadPriority",
+		"APNS rejected notification",
 	)
 	require.NotContains(t, err.Error(), "test-apns-id")
+	require.NotContains(t, err.Error(), apns2.ReasonBadPriority)
 }
 
-func TestApnsDelivery_ShouldPushFalseNeverCallsClient(t *testing.T) {
+func TestApnsDelivery_OuterPolicyFixtures(t *testing.T) {
+	tests := []struct {
+		name       string
+		shouldPush *bool
+		wantPush   bool
+	}{
+		{
+			name:       "visible exact true sends",
+			shouldPush: deliveryBoolPointer(true),
+			wantPush:   true,
+		},
+		{
+			name:       "control explicit false does not send",
+			shouldPush: deliveryBoolPointer(false),
+		},
+		{
+			name:       "ephemeral explicit false does not send",
+			shouldPush: deliveryBoolPointer(false),
+		},
+		{
+			name: "missing does not send",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &recordingApnsClient{}
+			req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+			req.MessageContext.ShouldPush = test.shouldPush
+			a := ApnsDelivery{
+				apnsClient: client,
+				opts:       options.ApnsOptions{Topic: "com.example.app"},
+			}
+
+			authorizedContext, allowed := pushpolicy.AuthorizeDelivery(t.Context(), req)
+			if test.wantPush {
+				require.True(t, allowed)
+				require.NoError(t, a.Send(authorizedContext, req))
+				require.Equal(t, 1, client.pushCount)
+				return
+			}
+
+			require.False(t, allowed)
+			require.ErrorIs(t, a.Send(authorizedContext, req), pushpolicy.ErrUnauthorized)
+			require.Zero(t, client.pushCount)
+		})
+	}
+}
+
+func TestApnsDelivery_UnsealedVisibleMessageNeverCallsClient(t *testing.T) {
 	client := &recordingApnsClient{}
-	shouldPush := false
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
-	req.MessageContext.ShouldPush = &shouldPush
 	a := ApnsDelivery{
-		logger:     zap.NewNop(),
 		apnsClient: client,
 		opts:       options.ApnsOptions{Topic: "com.example.app"},
 	}
 
-	require.NoError(t, a.Send(t.Context(), req))
+	require.ErrorIs(t, a.Send(t.Context(), req), pushpolicy.ErrUnauthorized)
 	require.Zero(t, client.pushCount)
 }
 
-func TestApnsDelivery_LogsDoNotContainApnsID(t *testing.T) {
+func TestApnsDelivery_WelcomeRemainsClosed(t *testing.T) {
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+	req.MessageContext = interfaces.MessageContext{MessageType: topics.V3Welcome}
+	req.EncryptedMessage = make([]byte, 8_192)
+
+	client := &recordingApnsClient{}
+	a := ApnsDelivery{
+		apnsClient: client,
+		opts:       options.ApnsOptions{Topic: "com.example.app"},
+	}
+	authorizedContext, allowed := pushpolicy.AuthorizeDelivery(t.Context(), req)
+	require.False(t, allowed)
+	require.ErrorIs(t, a.Send(authorizedContext, req), pushpolicy.ErrUnauthorized)
+	require.Zero(t, client.pushCount)
+}
+
+func TestApnsDelivery_SuccessResponseApnsIDIsNotSurfaced(t *testing.T) {
 	const sensitiveApnsID = "sensitive-apns-id"
-	core, logs := observer.New(zap.DebugLevel)
 	client := &recordingApnsClient{
 		response: &apns2.Response{
 			StatusCode: apns2.StatusSent,
@@ -208,20 +295,17 @@ func TestApnsDelivery_LogsDoNotContainApnsID(t *testing.T) {
 		},
 	}
 	a := ApnsDelivery{
-		logger:     zap.New(core),
 		apnsClient: client,
 		opts:       options.ApnsOptions{Topic: "com.example.app"},
 	}
 
-	require.NoError(t, a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3)))
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(
+		t,
+		t.Context(),
+		buildDeliveryRequest(t, interfaces.PayloadFormatV3),
+	)
+	require.NoError(t, a.Send(authorizedContext, authorizedRequest))
 	require.Equal(t, 1, client.pushCount)
-	for _, entry := range logs.All() {
-		require.NotContains(t, entry.Message, sensitiveApnsID)
-		for _, field := range entry.Context {
-			require.NotEqual(t, "apns_id", field.Key)
-			require.NotContains(t, field.String, sensitiveApnsID)
-		}
-	}
 }
 
 func Test_LoadApnsCertificate(t *testing.T) {

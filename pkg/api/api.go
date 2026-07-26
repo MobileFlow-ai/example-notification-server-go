@@ -107,8 +107,6 @@ func (s *ApiServer) RegisterInstallation(
 	ctx context.Context,
 	req *connect.Request[proto.RegisterInstallationRequest],
 ) (*connect.Response[proto.RegisterInstallationResponse], error) {
-	s.logger.Info("RegisterInstallation")
-
 	mechanism := convertDeliveryMechanism(req.Msg.DeliveryMechanism)
 	if mechanism == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("missing delivery mechanism"))
@@ -129,14 +127,8 @@ func (s *ApiServer) RegisterInstallation(
 		},
 	)
 	if err != nil {
-		s.logger.Error("error registering installation", zap.Error(err))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.logger.Info(
-		"installation registered",
-		zap.String("delivery_mechanism", string(mechanism.Kind)),
-		zap.String("payload_format", payloadFormat.String()),
-	)
 	return connect.NewResponse(&proto.RegisterInstallationResponse{
 		InstallationId: req.Msg.InstallationId,
 		ValidUntil:     uint64(result.ValidUntil.UnixMilli()),
@@ -147,11 +139,8 @@ func (s *ApiServer) DeleteInstallation(
 	ctx context.Context,
 	req *connect.Request[proto.DeleteInstallationRequest],
 ) (*connect.Response[emptypb.Empty], error) {
-	s.logger.Info("DeleteInstallation")
-
 	err := s.installations.Delete(ctx, req.Msg.InstallationId)
 	if err != nil {
-		s.logger.Error("error deleting installation", zap.Error(err))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -162,8 +151,6 @@ func (s *ApiServer) Subscribe(
 	ctx context.Context,
 	req *connect.Request[proto.SubscribeRequest],
 ) (*connect.Response[emptypb.Empty], error) {
-	s.logger.Info("Subscribe")
-
 	topics, err := normalizeTopics(req.Msg.Topics, req.Msg.TopicsBytes)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
@@ -171,7 +158,6 @@ func (s *ApiServer) Subscribe(
 
 	err = s.subscriptions.Subscribe(ctx, req.Msg.InstallationId, topics)
 	if err != nil {
-		s.logger.Error("error subscribing", zap.Error(err))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -182,8 +168,6 @@ func (s *ApiServer) Unsubscribe(
 	ctx context.Context,
 	req *connect.Request[proto.UnsubscribeRequest],
 ) (*connect.Response[emptypb.Empty], error) {
-	s.logger.Info("Unsubscribe")
-
 	topics, err := normalizeTopics(req.Msg.Topics, req.Msg.TopicsBytes)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
@@ -191,7 +175,6 @@ func (s *ApiServer) Unsubscribe(
 
 	err = s.subscriptions.Unsubscribe(ctx, req.Msg.InstallationId, topics)
 	if err != nil {
-		s.logger.Error("error unsubscribing", zap.Error(err))
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -199,8 +182,6 @@ func (s *ApiServer) Unsubscribe(
 }
 
 func (s *ApiServer) SubscribeWithMetadata(ctx context.Context, req *connect.Request[proto.SubscribeWithMetadataRequest]) (*connect.Response[emptypb.Empty], error) {
-	log := s.logger.With(zap.String("method", "subscribeWithMetadata"))
-	log.Info("Subscribing")
 	inputs, err := normalizeSubscriptionInputs(req.Msg.Subscriptions)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)

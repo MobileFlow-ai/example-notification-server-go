@@ -12,12 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
+	"github.com/xmtp/example-notification-server-go/pkg/pushpolicy"
+	"github.com/xmtp/example-notification-server-go/pkg/topics"
 	"go.uber.org/zap/zaptest"
 )
 
 func newTestRequest() interfaces.SendRequest {
+	shouldPush := true
 	return interfaces.SendRequest{
 		IdempotencyKey: "test-key",
+		MessageContext: interfaces.MessageContext{
+			MessageType: topics.V3Conversation,
+			ShouldPush:  &shouldPush,
+		},
 	}
 }
 
@@ -48,7 +55,8 @@ func TestHttpDelivery_SendSuccess(t *testing.T) {
 	server, d := testServerAndDelivery(t, countingHandler(&requestCount, http.StatusOK), 3, 10)
 	defer server.Close()
 
-	err := d.Send(t.Context(), newTestRequest())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	err := d.Send(authorizedContext, authorizedRequest)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), atomic.LoadInt32(&requestCount))
 }
@@ -65,7 +73,8 @@ func TestHttpDelivery_RetryOnFailureThenSuccess(t *testing.T) {
 	}, 3, 10)
 	defer server.Close()
 
-	err := d.Send(t.Context(), newTestRequest())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	err := d.Send(authorizedContext, authorizedRequest)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), atomic.LoadInt32(&requestCount))
 }
@@ -76,7 +85,8 @@ func TestHttpDelivery_ExhaustsAttempts(t *testing.T) {
 	server, d := testServerAndDelivery(t, countingHandler(&requestCount, http.StatusInternalServerError), maxAttempts, 10)
 	defer server.Close()
 
-	err := d.Send(t.Context(), newTestRequest())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	err := d.Send(authorizedContext, authorizedRequest)
 	require.Error(t, err)
 	require.Equal(t, "HTTP request failed", err.Error())
 	require.Equal(t, int32(maxAttempts), atomic.LoadInt32(&requestCount))
@@ -88,10 +98,11 @@ func TestHttpDelivery_ContextCancellation(t *testing.T) {
 	defer server.Close()
 
 	ctx, cancel := context.WithCancel(t.Context())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, ctx, newTestRequest())
 
 	done := make(chan error, 1)
 	go func() {
-		done <- d.Send(ctx, newTestRequest())
+		done <- d.Send(authorizedContext, authorizedRequest)
 	}()
 
 	// Wait for first attempt to complete, then cancel
@@ -124,7 +135,8 @@ func TestHttpDelivery_ExponentialBackoff(t *testing.T) {
 	}, 4, 50)
 	defer server.Close()
 
-	_ = d.Send(t.Context(), newTestRequest())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	_ = d.Send(authorizedContext, authorizedRequest)
 
 	// Should have 4 requests total (maxAttempts=4)
 	require.Len(t, timestamps, 4)
@@ -145,7 +157,8 @@ func TestHttpDelivery_SingleAttempt(t *testing.T) {
 	server, d := testServerAndDelivery(t, countingHandler(&requestCount, http.StatusInternalServerError), 1, 10)
 	defer server.Close()
 
-	err := d.Send(t.Context(), newTestRequest())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	err := d.Send(authorizedContext, authorizedRequest)
 	require.Error(t, err)
 	// With maxAttempts=1, only one attempt is made (no retries)
 	require.Equal(t, int32(1), atomic.LoadInt32(&requestCount))
@@ -178,6 +191,27 @@ func TestHttp_PayloadIncludesPayloadFormat(t *testing.T) {
 	require.Equal(t, "v4", p["payload_format"])
 }
 
+func TestHttp_WelcomePayloadIsCompact(t *testing.T) {
+	req := interfaces.SendRequest{
+		Topic:            "welcome-topic",
+		EncryptedMessage: make([]byte, 8_192),
+		MessageContext:   interfaces.MessageContext{MessageType: topics.V3Welcome},
+	}
+
+	jsonData, err := json.Marshal(req)
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, json.Unmarshal(jsonData, &payload))
+	message := payload["message"].(map[string]interface{})
+	require.NotContains(t, message, "message")
+	require.Less(t, len(jsonData), 1_024)
+}
+
+func TestHttpDelivery_UnsealedRequestReturnsUnauthorized(t *testing.T) {
+	d := NewHttpDelivery(zaptest.NewLogger(t), options.HttpDeliveryOptions{})
+	require.ErrorIs(t, d.Send(t.Context(), newTestRequest()), pushpolicy.ErrUnauthorized)
+}
+
 func TestHttpDelivery_CanDeliver(t *testing.T) {
 	d := NewHttpDelivery(zaptest.NewLogger(t), options.HttpDeliveryOptions{})
 	require.True(t, d.CanDeliver(newTestRequest()))
@@ -198,7 +232,8 @@ func TestHttpDelivery_AuthHeader(t *testing.T) {
 		InitialRetryDelayMs: 10,
 	})
 
-	err := d.Send(t.Context(), newTestRequest())
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	err := d.Send(authorizedContext, authorizedRequest)
 	require.NoError(t, err)
 	require.Equal(t, "Bearer test-token", receivedAuth)
 }

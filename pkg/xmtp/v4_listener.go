@@ -67,11 +67,7 @@ func NewV4Listener(
 		subscriptions:   subscriptions,
 		clientVersion:   clientVersion,
 		appVersion:      appVersion,
-		dispatcher: deliveryDispatcher{
-			logger:           namedLogger,
-			ctx:              ctx,
-			deliveryServices: deliveryServices,
-		},
+		dispatcher:      newDeliveryDispatcher(ctx, deliveryServices),
 	}, nil
 }
 
@@ -163,9 +159,7 @@ func (l *V4Listener) startEnvelopeWorkers() {
 	for i := 0; i < l.opts.NumWorkers; i++ {
 		go func() {
 			for env := range l.envelopeChannel {
-				if err := l.processOriginatorEnvelope(env); err != nil {
-					l.logger.Error("error processing originator envelope", zap.Error(err))
-				}
+				_ = l.processOriginatorEnvelope(env)
 			}
 		}()
 	}
@@ -174,15 +168,12 @@ func (l *V4Listener) startEnvelopeWorkers() {
 func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnvelope) error {
 	origEnv, err := envelopes.NewOriginatorEnvelope(env)
 	if err != nil {
-		l.logger.Info("skipping envelope: failed to parse originator envelope", zap.Error(err))
 		return nil
 	}
 
 	clientEnvelope := origEnv.UnsignedOriginatorEnvelope.PayerEnvelope.ClientEnvelope
 	targetTopic := clientEnvelope.TargetTopic()
 	thirtyDayPeriod := int(origEnv.OriginatorNs() / 1_000_000_000 / 60 / 60 / 24 / 30)
-
-	logger := l.logger.With(zap.Uint32("node_id", origEnv.OriginatorNodeID()), zap.Uint64("sequence_id", origEnv.OriginatorSequenceID()))
 
 	var subs []interfaces.Subscription
 	if subs, err = l.subscriptions.GetSubscriptions(l.ctx, &targetTopic, thirtyDayPeriod); err != nil {
@@ -213,6 +204,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 		installationMap[inst.Id] = inst
 	}
 
+	var firstError error
 	for _, sub := range subs {
 		inst, exists := installationMap[sub.InstallationId]
 		if !exists {
@@ -221,28 +213,25 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 		var req interfaces.SendRequest
 		switch inst.PayloadFormat {
 		case interfaces.PayloadFormatV4:
-			req, err = buildV4SendRequest(logger, origEnv, &clientEnvelope, &targetTopic, idempotencyKey, inst, sub)
+			req, err = buildV4SendRequest(origEnv, &clientEnvelope, &targetTopic, idempotencyKey, inst, sub)
 		default:
-			req, err = buildV3SendRequest(logger, origEnv, &clientEnvelope, &targetTopic, idempotencyKey, inst, sub)
+			req, err = buildV3SendRequest(origEnv, &clientEnvelope, &targetTopic, idempotencyKey, inst, sub)
 		}
 
 		if err != nil {
-			logger.Warn("error building send request", zap.Error(err), zap.String("payload_format", inst.PayloadFormat.String()))
 			continue
 		}
 
-		if err = l.dispatcher.dispatch(req); err != nil {
-			logger.Error("error delivering V4 request", zap.Error(err))
+		if err = l.dispatcher.dispatch(req); err != nil && firstError == nil {
+			firstError = err
 		}
 	}
 
-	return nil
+	return firstError
 }
 
 // buildV4SendRequest constructs a SendRequest for the given installation.
-// Returns (request, true) if the request should be be delivered, (request, false) otherwise.
 func buildV4SendRequest(
-	logger *zap.Logger,
 	origEnv *envelopes.OriginatorEnvelope,
 	clientEnv *envelopes.ClientEnvelope,
 	targetTopic *topic.Topic,
@@ -283,9 +272,7 @@ func buildV4SendRequest(
 }
 
 // buildV3SendRequest constructs a SendRequest for the given installation.
-// Returns (request, true) if the request should be be delivered, (request, false) otherwise.
 func buildV3SendRequest(
-	logger *zap.Logger,
 	origEnv *envelopes.OriginatorEnvelope,
 	clientEnv *envelopes.ClientEnvelope,
 	targetTopic *topic.Topic,

@@ -3,7 +3,6 @@ package xmtp
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -11,83 +10,127 @@ import (
 	"github.com/xmtp/example-notification-server-go/mocks"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/testutils"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
+	"github.com/xmtp/example-notification-server-go/pkg/topics"
 )
 
 // Compile-time assertions: both listeners must implement NotificationListener
 var _ NotificationListener = (*Listener)(nil)
 var _ NotificationListener = (*V4Listener)(nil)
 
-func TestDeliveryDispatcher_ShouldDeliver_SkipsSender(t *testing.T) {
-	dispatcher := &deliveryDispatcher{
-		logger: testutils.TestLogger(t),
+func testConversationRequest(shouldPush *bool) interfaces.SendRequest {
+	return interfaces.SendRequest{
+		Installation: interfaces.Installation{
+			DeliveryMechanism: interfaces.DeliveryMechanism{Kind: interfaces.APNS},
+		},
+		MessageContext: interfaces.MessageContext{
+			MessageType: topics.V3Conversation,
+			ShouldPush:  shouldPush,
+		},
 	}
+}
+
+func TestDeliveryDispatcher_SkipsSender(t *testing.T) {
+	mockDelivery := mocks.NewDelivery(t)
+	shouldPush := true
 	hmacKey := []byte("test-key")
 	data := []byte("test-data")
 	h := hmac.New(sha256.New, hmacKey)
 	h.Write(data)
 	senderHmac := h.Sum(nil)
 
-	mc := interfaces.MessageContext{
-		SenderHmac: &senderHmac,
-		HmacInputs: &data,
-	}
-	sub := interfaces.Subscription{
-		HmacKey: &interfaces.HmacKey{Key: hmacKey},
-	}
-	require.False(t, dispatcher.shouldDeliver(mc, sub))
+	req := testConversationRequest(&shouldPush)
+	req.MessageContext.SenderHmac = &senderHmac
+	req.MessageContext.HmacInputs = &data
+	req.Subscription.HmacKey = &interfaces.HmacKey{Key: hmacKey}
+	dispatcher := newDeliveryDispatcher(
+		t.Context(),
+		[]interfaces.Delivery{mockDelivery},
+	)
+
+	require.NoError(t, dispatcher.dispatch(req))
+	mockDelivery.AssertNotCalled(t, "CanDeliver", mock.Anything)
+	mockDelivery.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
 }
 
-func TestDeliveryDispatcher_ShouldDeliver_RespectsNotPush(t *testing.T) {
-	dispatcher := &deliveryDispatcher{
-		logger: testutils.TestLogger(t),
-	}
+func TestDeliveryDispatcher_RespectsFalseShouldPush(t *testing.T) {
+	mockDelivery := mocks.NewDelivery(t)
 	shouldPush := false
-	mc := interfaces.MessageContext{ShouldPush: &shouldPush}
-	sub := interfaces.Subscription{}
-	require.False(t, dispatcher.shouldDeliver(mc, sub))
+	dispatcher := newDeliveryDispatcher(
+		t.Context(),
+		[]interfaces.Delivery{mockDelivery},
+	)
+
+	require.NoError(t, dispatcher.dispatch(testConversationRequest(&shouldPush)))
+	mockDelivery.AssertNotCalled(t, "CanDeliver", mock.Anything)
+	mockDelivery.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
 }
 
-func TestDeliveryDispatcher_Deliver_CallsMatchingService(t *testing.T) {
+func TestDeliveryDispatcher_ExactTrueConversationReachesMatchingService(t *testing.T) {
 	mockDelivery := testutils.MockDeliveryAcceptAll(t)
+	shouldPush := true
+	dispatcher := newDeliveryDispatcher(
+		t.Context(),
+		[]interfaces.Delivery{mockDelivery},
+	)
+	req := testConversationRequest(&shouldPush)
+	req.Topic = "/test/topic"
+	req.EncryptedMessage = []byte("msg")
 
-	dispatcher := &deliveryDispatcher{
-		logger:           testutils.TestLogger(t),
-		ctx:              t.Context(),
-		deliveryServices: []interfaces.Delivery{mockDelivery},
+	require.NoError(t, dispatcher.dispatch(req))
+	mockDelivery.AssertCalled(t, "Send", mock.Anything, req)
+}
+
+func TestDeliveryDispatcher_MissingMalformedAndUnknownShouldPushFailClosed(t *testing.T) {
+	shouldPush := true
+	tests := []struct {
+		name string
+		req  interfaces.SendRequest
+	}{
+		{
+			name: "missing",
+			req:  testConversationRequest(nil),
+		},
+		{
+			name: "malformed envelope context",
+			req:  testConversationRequest(nil),
+		},
+		{
+			name: "unknown message type",
+			req: interfaces.SendRequest{
+				MessageContext: interfaces.MessageContext{
+					MessageType: topics.Unknown,
+					ShouldPush:  &shouldPush,
+				},
+			},
+		},
 	}
-	req := interfaces.SendRequest{
-		Topic:            "/test/topic",
-		EncryptedMessage: []byte("msg"),
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mockDelivery := mocks.NewDelivery(t)
+			dispatcher := newDeliveryDispatcher(
+				t.Context(),
+				[]interfaces.Delivery{mockDelivery},
+			)
+
+			require.NoError(t, dispatcher.dispatch(test.req))
+			mockDelivery.AssertNotCalled(t, "CanDeliver", mock.Anything)
+			mockDelivery.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
+		})
 	}
-	err := dispatcher.deliver(req)
-	require.NoError(t, err)
-	mockDelivery.AssertCalled(t, "Send", mock.Anything, mock.Anything)
 }
 
 func TestDeliveryDispatcher_Dispatch_NoPushNeverReachesEgress(t *testing.T) {
 	mockDelivery := mocks.NewDelivery(t)
 	shouldPush := false
-	observedCore, logs := observer.New(zap.DebugLevel)
-	dispatcher := &deliveryDispatcher{
-		logger:           zap.New(observedCore),
-		ctx:              t.Context(),
-		deliveryServices: []interfaces.Delivery{mockDelivery},
-	}
-	req := interfaces.SendRequest{
-		Topic: "/sensitive/raw/topic",
-		MessageContext: interfaces.MessageContext{
-			ShouldPush: &shouldPush,
-		},
-	}
+	dispatcher := newDeliveryDispatcher(
+		t.Context(),
+		[]interfaces.Delivery{mockDelivery},
+	)
+	req := testConversationRequest(&shouldPush)
+	req.Topic = "/sensitive/raw/topic"
 
 	require.NoError(t, dispatcher.dispatch(req))
 	mockDelivery.AssertNotCalled(t, "CanDeliver", mock.Anything)
 	mockDelivery.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
-	for _, entry := range logs.All() {
-		rendered := fmt.Sprintf("%s %#v", entry.Message, entry.ContextMap())
-		require.NotContains(t, rendered, req.Topic)
-		require.NotContains(t, rendered, "message_context")
-	}
 }

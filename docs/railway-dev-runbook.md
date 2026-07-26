@@ -50,24 +50,34 @@ Use only one APNS certificate input. Railway should use
 The bridge reads XMTP's outer envelope metadata. It cannot inspect an encrypted
 Hytch content type.
 
-- An explicit `shouldPush=false` is a hard no-push decision. The dispatcher
-  blocks every delivery service before egress, and APNS repeats the check as a
-  defense in depth.
-- Hytch must set `shouldPush=false` before publishing every control or ephemeral
-  message. The bridge does not infer this from encrypted content.
-- A missing `shouldPush` keeps the legacy behavior and is eligible for push.
+- Conversation delivery requires the outer XMTP `shouldPush` Boolean to be
+  present and exactly `true`. Missing, malformed, false, and unknown inputs fail
+  closed.
+- Hytch sender codecs must set `shouldPush=false` on every control or ephemeral
+  type. The bridge cannot decrypt the subtype and cannot correct a modified
+  sender that lies with `shouldPush=true`; codec conformance and rollout kill
+  switches are the supported controls.
+- Visible SOS, location-share, and initial location-pulse messages remain
+  eligible when their outer bit is exactly true. Gate 8's rare-cohort
+  suppression applies to telemetry, not delivery.
+- Welcome delivery is closed. The supported XMTP outer data does not provide
+  the exact pre-decryption binding required by Gate 6.2, so this bridge exposes
+  no correlator hook and sends no Welcome push. Link-enabled crews remain on the
+  legacy path until a reviewed SDK or protocol change passes the positive
+  correlator suite.
 - To turn APNS delivery OFF for the whole dev bridge, remove the
   `--apns-enabled` start flag (and any equivalent enablement) and redeploy.
-  Registration and subscriptions can remain intact. Confirm the bridge reports
-  no matching APNS delivery service before considering OFF verified.
+  Registration and subscriptions can remain intact. Verify OFF with the
+  configured service state and a zero-attempt APNS smoke fixture; the bridge
+  intentionally does not emit event-level delivery logs.
 
 ## Compact welcomes
 
-Welcome pushes intentionally omit the encrypted welcome envelope. The topic and
-message kind wake the Notification Service Extension, which then synchronizes
-the welcome from XMTP. This keeps the APNS payload below the 4 KiB limit.
-Conversation pushes retain their encrypted envelope for Notification Service
-Extension processing.
+Welcome payload builders intentionally omit the encrypted welcome envelope
+across APNS, FCM (including its APNS projection), and HTTP. This preserves the
+compact wakeup shape for a future protocol-supported correlator without
+enabling Welcome egress today. Conversation payloads retain their encrypted
+envelope for Notification Service Extension processing.
 
 ## Deploy to Railway dev
 
@@ -85,14 +95,18 @@ Extension processing.
 
 - `go test -p 1 ./...` passes for the deployed revision.
 - `/readyz` is successful after the listener connects.
-- A normal conversation envelope with `shouldPush=true` produces one dev APNS
-  attempt for one subscribed test installation.
-- A control or ephemeral fixture published with `shouldPush=false` produces
-  zero APNS attempts. Verify with aggregate delivery counters or the focused
-  test; logs intentionally omit device tokens, HMAC material, raw topics,
-  message context, and APNS identifiers.
-- A welcome for a subscribed test installation produces a payload below 4 KiB
-  without an inline encrypted welcome.
+- A visible conversation envelope with explicit `shouldPush=true` produces one
+  dev APNS attempt for one subscribed test installation.
+- Control and ephemeral fixtures with explicit `shouldPush=false` produce zero
+  APNS attempts. Missing, malformed, and unknown outer policy inputs also
+  produce zero attempts.
+- Welcome fixtures produce zero egress attempts. Unit tests separately pin that
+  the dormant APNS, FCM, and HTTP payload builders omit the encrypted Welcome.
+- No event-level push outcomes, raw topics, device tokens, identifiers, message
+  sizes, exact content types, or exact activity timing are written to logs or
+  analytics. This tranche intentionally exposes no telemetry counters: the
+  bridge lacks a trustworthy non-rare eligibility bit, and process-local
+  unexported counters would not satisfy Gate 8.5.
 - No production bundle topic, production APNS mode, or production XMTP endpoint
   is configured.
 

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
-	"go.uber.org/zap"
+	"github.com/xmtp/example-notification-server-go/pkg/pushpolicy"
 )
 
 const STARTING_SLEEP_TIME = 100 * time.Millisecond
@@ -30,51 +30,45 @@ type NotificationListener interface {
 
 // deliveryDispatcher handles shared delivery logic for both V3 and V4 listeners
 type deliveryDispatcher struct {
-	logger           *zap.Logger
 	ctx              context.Context
 	deliveryServices []interfaces.Delivery
 }
 
-func (d *deliveryDispatcher) shouldDeliver(messageContext interfaces.MessageContext, subscription interfaces.Subscription) bool {
-	if subscription.HmacKey != nil && len(subscription.HmacKey.Key) > 0 {
-		isSender := messageContext.IsSender(subscription.HmacKey.Key)
-		if isSender {
-			return false
-		}
+func newDeliveryDispatcher(
+	ctx context.Context,
+	deliveryServices []interfaces.Delivery,
+) deliveryDispatcher {
+	return deliveryDispatcher{
+		ctx:              ctx,
+		deliveryServices: deliveryServices,
 	}
-	if messageContext.ShouldPush != nil {
-		shouldPush := messageContext.ShouldPush
-		return *shouldPush
-	}
-	return true
 }
 
-// dispatch is the single egress gate for every delivery mechanism. Keeping the
-// should-push check adjacent to the injected delivery services makes it hard for
-// a listener to accidentally bypass the policy when adding a new payload path.
+// dispatch is the single egress gate for every delivery mechanism.
 func (d *deliveryDispatcher) dispatch(req interfaces.SendRequest) error {
-	if !d.shouldDeliver(req.MessageContext, req.Subscription) {
-		d.logger.Debug(
-			"delivery suppressed by envelope policy",
-			zap.String("message_type", string(req.MessageContext.MessageType)),
-		)
+	baseContext := d.ctx
+	if baseContext == nil {
+		baseContext = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseContext, DELIVERY_TIMEOUT)
+	defer cancel()
+
+	authorizedContext, allowed := pushpolicy.AuthorizeDelivery(ctx, req)
+	if !allowed {
 		return nil
 	}
 
-	return d.deliver(req)
+	return d.deliver(authorizedContext, req)
 }
 
-func (d *deliveryDispatcher) deliver(req interfaces.SendRequest) error {
-	ctx, cancel := context.WithTimeout(d.ctx, DELIVERY_TIMEOUT)
-	defer cancel()
+func (d *deliveryDispatcher) deliver(
+	ctx context.Context,
+	req interfaces.SendRequest,
+) error {
 	for _, service := range d.deliveryServices {
 		if service.CanDeliver(req) {
-			d.logger.Info("active subscription found. sending message",
-				zap.String("message_type", string(req.MessageContext.MessageType)),
-			)
 			return service.Send(ctx, req)
 		}
 	}
-	d.logger.Info("No delivery service matches request", zap.String("delivery_mechanism", string(req.Installation.DeliveryMechanism.Kind)))
 	return nil
 }
