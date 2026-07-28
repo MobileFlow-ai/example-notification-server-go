@@ -5,4 +5,10 @@ breaking:
     - FILE
 lint:
   use:
-    - DEFAULT
+    - STANDARD
+  # These established public names predate the current standard rules.
+  # Renaming the service or replacing Empty responses would break clients.
+  except:
+    - SERVICE_SUFFIX
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_RESPONSE_STANDARD_NAME

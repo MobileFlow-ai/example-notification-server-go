@@ -1,7 +1,10 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -31,6 +34,9 @@ func deliveryBoolPointer(value bool) *bool {
 func (c *recordingApnsClient) PushWithContext(_ apns2.Context, notification *apns2.Notification) (*apns2.Response, error) {
 	c.pushCount++
 	c.notification = notification
+	if c.response == nil && c.err == nil {
+		return &apns2.Response{StatusCode: apns2.StatusSent}, nil
+	}
 	return c.response, c.err
 }
 
@@ -41,13 +47,26 @@ func buildDeliveryRequest(t *testing.T, payloadFormat interfaces.PayloadFormat) 
 	require.NoError(t, err)
 	topicStr := topics.TopicToString(parsed)
 	shouldPush := true
+	hmacInputs := []byte("hmac-input")
+	hmacKey := bytes.Repeat([]byte{0x11}, sha256.Size)
+	otherKey := bytes.Repeat([]byte{0x22}, sha256.Size)
+	hash := hmac.New(sha256.New, otherKey)
+	_, _ = hash.Write(hmacInputs)
+	senderHmac := hash.Sum(nil)
+	expectedPeriod := 1
 	req := interfaces.SendRequest{
 		Topic:            topicStr,
 		EncryptedMessage: []byte("test"),
 		PayloadFormat:    payloadFormat,
 		Subscription: interfaces.Subscription{
-			TopicV4: parsed,
-			Topic:   topicStr,
+			IsActive:              true,
+			TopicV4:               parsed,
+			Topic:                 topicStr,
+			ExpectedHmacKeyPeriod: &expectedPeriod,
+			HmacKey: &interfaces.HmacKey{
+				ThirtyDayPeriodsSinceEpoch: expectedPeriod,
+				Key:                        hmacKey,
+			},
 		},
 		Installation: interfaces.Installation{
 			DeliveryMechanism: interfaces.DeliveryMechanism{
@@ -59,6 +78,8 @@ func buildDeliveryRequest(t *testing.T, payloadFormat interfaces.PayloadFormat) 
 		MessageContext: interfaces.MessageContext{
 			MessageType: topics.V3Conversation,
 			ShouldPush:  &shouldPush,
+			HmacInputs:  &hmacInputs,
+			SenderHmac:  &senderHmac,
 		},
 	}
 	if payloadFormat == interfaces.PayloadFormatV4 {
@@ -78,11 +99,22 @@ func authorizeTestDeliveryRequest(
 	return authorizedContext, req
 }
 
+func mustBuildNotification(
+	t *testing.T,
+	delivery ApnsDelivery,
+	req interfaces.SendRequest,
+) *apns2.Notification {
+	t.Helper()
+	notification, err := delivery.buildNotification(req)
+	require.NoError(t, err)
+	return notification
+}
+
 func TestApns_PayloadIncludesPayloadFormat(t *testing.T) {
 	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
 	require.NoError(t, err)
 
@@ -95,7 +127,7 @@ func Test_ApnsDelivery_BuildNotification_TopicField(t *testing.T) {
 	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
 	require.NoError(t, err)
 
@@ -113,7 +145,7 @@ func Test_ApnsDelivery_BuildNotification_WelcomeOmitsEncryptedMessage(t *testing
 	req.MessageContext.MessageType = topics.V3Welcome
 	req.EncryptedMessage = make([]byte, 8_192)
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
 	require.NoError(t, err)
 
@@ -128,7 +160,7 @@ func Test_ApnsDelivery_BuildNotification_ConversationIncludesEncryptedMessage(t 
 	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
 	require.NoError(t, err)
 
@@ -141,7 +173,7 @@ func Test_ApnsDelivery_BuildNotification_V4TopicBytesB64(t *testing.T) {
 	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV4)
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	payloadBytes, err := notification.Payload.(*payload.Payload).MarshalJSON()
 	require.NoError(t, err)
 
@@ -156,7 +188,7 @@ func Test_ApnsDelivery_BuildNotification_AlertHeaders(t *testing.T) {
 	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	require.Equal(t, apns2.PushTypeAlert, notification.PushType)
 	require.Equal(t, apns2.PriorityHigh, notification.Priority)
 
@@ -176,7 +208,7 @@ func Test_ApnsDelivery_BuildNotification_SilentHeaders(t *testing.T) {
 	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
 	req.Subscription.IsSilent = true
 
-	notification := a.buildNotification(req)
+	notification := mustBuildNotification(t, a, req)
 	require.Equal(t, apns2.PushTypeBackground, notification.PushType)
 	require.Equal(t, apns2.PriorityLow, notification.Priority)
 
@@ -192,7 +224,7 @@ func Test_ApnsDelivery_BuildNotification_SilentHeaders(t *testing.T) {
 }
 
 func Test_ApnsResponseError(t *testing.T) {
-	require.NoError(t, apnsResponseError(nil))
+	require.ErrorIs(t, apnsResponseError(nil), ErrAPNSUnavailable)
 	require.NoError(t, apnsResponseError(&apns2.Response{StatusCode: apns2.StatusSent}))
 
 	err := apnsResponseError(&apns2.Response{
@@ -253,6 +285,34 @@ func TestApnsDelivery_OuterPolicyFixtures(t *testing.T) {
 
 			require.False(t, allowed)
 			require.ErrorIs(t, a.Send(authorizedContext, req), pushpolicy.ErrUnauthorized)
+			require.Zero(t, client.pushCount)
+		})
+	}
+}
+
+func TestApnsDelivery_ControlAndEphemeralOuterDecisionsMakeZeroAPNSCalls(t *testing.T) {
+	// The bridge cannot decrypt or classify message content. These cases test
+	// only the authenticated outer shouldPush decision supplied by XMTP.
+	for _, outerDecision := range []string{"control", "ephemeral"} {
+		t.Run(outerDecision, func(t *testing.T) {
+			client := &recordingApnsClient{}
+			req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+			req.MessageContext.ShouldPush = deliveryBoolPointer(false)
+			delivery := &ApnsDelivery{
+				apnsClient: client,
+				opts:       options.ApnsOptions{Topic: "com.example.app"},
+			}
+
+			authorizedContext, allowed := pushpolicy.AuthorizeDelivery(
+				t.Context(),
+				req,
+			)
+			require.False(t, allowed)
+			require.ErrorIs(
+				t,
+				delivery.Send(authorizedContext, req),
+				pushpolicy.ErrUnauthorized,
+			)
 			require.Zero(t, client.pushCount)
 		})
 	}
@@ -338,4 +398,44 @@ func Test_LoadApnsCertificate(t *testing.T) {
 		_, err := loadApnsCertificate(options.ApnsOptions{})
 		require.EqualError(t, err, "APNS .p8 certificate is not configured")
 	})
+}
+
+func TestSecureAPNSConfigurationRequiresOneBase64CredentialAndMatchingEnvironment(
+	t *testing.T,
+) {
+	valid := options.ApnsOptions{
+		SecureWrapperRequired: true,
+		SecureEnvironment:     "development",
+		Mode:                  "development",
+		P8CertificateBase64:   "encoded-p8",
+		KeyId:                 "key-id",
+		TeamId:                "team-id",
+		Topic:                 "com.example.hytch.dev",
+	}
+	require.NoError(t, validateSecureAPNSOptions(valid))
+
+	testCases := []func(*options.ApnsOptions){
+		func(opts *options.ApnsOptions) { opts.P8CertificateBase64 = "" },
+		func(opts *options.ApnsOptions) { opts.P8Certificate = "raw-p8" },
+		func(opts *options.ApnsOptions) { opts.P8CertificateFilePath = "/tmp/key.p8" },
+		func(opts *options.ApnsOptions) { opts.KeyId = "" },
+		func(opts *options.ApnsOptions) { opts.TeamId = "" },
+		func(opts *options.ApnsOptions) { opts.Topic = "" },
+		func(opts *options.ApnsOptions) { opts.SecureEnvironment = "production" },
+	}
+	for _, mutate := range testCases {
+		candidate := valid
+		mutate(&candidate)
+		require.EqualError(
+			t,
+			validateSecureAPNSOptions(candidate),
+			"secure APNS configuration invalid",
+		)
+	}
+
+	legacy := options.ApnsOptions{
+		P8Certificate: "legacy-inline-p8",
+		Mode:          "development",
+	}
+	require.NoError(t, validateSecureAPNSOptions(legacy))
 }

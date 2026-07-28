@@ -24,6 +24,11 @@ var migrationFS embed.FS
 // migrations are still applied normally after older deployments upgrade.
 const legacyBunBaselineVersion = 2
 
+var ErrSchemaNotCurrent = errors.New("database schema is not current")
+var ErrEnabledEventTrigger = errors.New(
+	"enabled database event trigger blocks migration",
+)
+
 // LatestVersion returns the highest migration version found in the embedded
 // migration files. This is useful for tests that need to assert the current
 // schema version without hardcoding a number.
@@ -56,6 +61,9 @@ func LatestVersion() (int, error) {
 // deployments keep their existing application tables while still allowing future
 // golang-migrate-only migrations to run normally after upgrade.
 func Migrate(ctx context.Context, db *sql.DB) error {
+	if err := RequireNoEnabledEventTriggers(ctx, db); err != nil {
+		return err
+	}
 	return withMigrator(ctx, db, func(m *migrate.Migrate) error {
 		return m.Up()
 	})
@@ -63,16 +71,160 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 
 // MigrateUpTo runs migrations up to (and including) the given version.
 func MigrateUpTo(ctx context.Context, db *sql.DB, version uint) error {
+	if err := RequireNoEnabledEventTriggers(ctx, db); err != nil {
+		return err
+	}
 	return withMigrator(ctx, db, func(m *migrate.Migrate) error {
 		return m.Migrate(version)
 	})
 }
 
-func withMigrator(ctx context.Context, db *sql.DB, fn func(*migrate.Migrate) error) error {
-	if err := reconcileExistingBunSchema(ctx, db); err != nil {
-		return err
+// RequireNoEnabledEventTriggers is a read-only preflight that must run before
+// any migration DDL. An enabled event trigger can observe DDL while legacy
+// plaintext rows still exist, so migration refuses every enabled mode,
+// including ENABLE REPLICA and ENABLE ALWAYS.
+func RequireNoEnabledEventTriggers(
+	ctx context.Context,
+	db *sql.DB,
+) error {
+	if db == nil {
+		return ErrEnabledEventTrigger
 	}
+	var enabled bool
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT EXISTS (
+		     SELECT 1
+		       FROM pg_catalog.pg_event_trigger AS event_trigger
+		      WHERE event_trigger.evtenabled <> 'D'
+		 )`,
+	).Scan(&enabled); err != nil {
+		return ErrEnabledEventTrigger
+	}
+	if enabled {
+		return ErrEnabledEventTrigger
+	}
+	return nil
+}
 
+// RequireCurrent is a read-only runtime gate. Secure services use it instead
+// of applying owner-level migrations during process startup.
+func RequireCurrent(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return ErrSchemaNotCurrent
+	}
+	latest, err := LatestVersion()
+	if err != nil {
+		return ErrSchemaNotCurrent
+	}
+	var tableExists bool
+	if err = db.QueryRowContext(
+		ctx,
+		`SELECT pg_catalog.to_regclass(
+		     'public.schema_migrations'
+		 ) IS NOT NULL`,
+	).Scan(&tableExists); err != nil || !tableExists {
+		return ErrSchemaNotCurrent
+	}
+	var relationValid bool
+	if err = db.QueryRowContext(
+		ctx,
+		`WITH migration_relation AS (
+		     SELECT relation.oid,
+		            relation.relkind,
+		            relation.relpersistence,
+		            relation.relrowsecurity,
+		            relation.relforcerowsecurity
+		       FROM pg_catalog.pg_class AS relation
+		       JOIN pg_catalog.pg_namespace AS namespace
+		         ON namespace.oid = relation.relnamespace
+		      WHERE namespace.nspname = 'public'
+		        AND relation.relname = 'schema_migrations'
+		 )
+		 SELECT COALESCE((
+		     SELECT
+		         relation.relkind = 'r' AND
+		         relation.relpersistence = 'p' AND
+		         NOT relation.relrowsecurity AND
+		         NOT relation.relforcerowsecurity AND
+		         (
+		             SELECT pg_catalog.count(*) = 2 AND
+		                    COALESCE(pg_catalog.bool_and(
+		                        (
+		                            attribute.attname = 'version' AND
+		                            attribute.atttypid =
+		                                'pg_catalog.int8'
+		                                    ::pg_catalog.regtype AND
+		                            attribute.attnotnull
+		                        ) OR (
+		                            attribute.attname = 'dirty' AND
+		                            attribute.atttypid =
+		                                'pg_catalog.bool'
+		                                    ::pg_catalog.regtype AND
+		                            attribute.attnotnull
+		                        )
+		                    ), FALSE)
+		               FROM pg_catalog.pg_attribute AS attribute
+		              WHERE attribute.attrelid = relation.oid
+		                AND attribute.attnum > 0
+		                AND NOT attribute.attisdropped
+		         ) AND
+		         (
+		             SELECT pg_catalog.count(*) = 1
+		               FROM pg_catalog.pg_constraint AS constraint_record
+		              WHERE constraint_record.conrelid = relation.oid
+		                AND constraint_record.contype = 'p'
+		                AND constraint_record.conkey = ARRAY[
+		                    (
+		                        SELECT attribute.attnum
+		                          FROM pg_catalog.pg_attribute AS attribute
+		                         WHERE attribute.attrelid = relation.oid
+		                           AND attribute.attname = 'version'
+		                           AND NOT attribute.attisdropped
+		                    )
+		                ]::pg_catalog.int2[]
+		         ) AND
+		         NOT EXISTS (
+		             SELECT 1
+		               FROM pg_catalog.pg_policy AS policy
+		              WHERE policy.polrelid = relation.oid
+		         ) AND
+		         NOT EXISTS (
+		             SELECT 1
+		               FROM pg_catalog.pg_rewrite AS rewrite_rule
+		              WHERE rewrite_rule.ev_class = relation.oid
+		         ) AND
+		         NOT EXISTS (
+		             SELECT 1
+		               FROM pg_catalog.pg_trigger AS trigger
+		              WHERE trigger.tgrelid = relation.oid
+		                AND NOT trigger.tgisinternal
+		         )
+		       FROM migration_relation AS relation
+		 ), FALSE)`,
+	).Scan(&relationValid); err != nil || !relationValid {
+		return ErrSchemaNotCurrent
+	}
+	var rowCount int
+	var version int
+	var dirty bool
+	if err = db.QueryRowContext(
+		ctx,
+		`SELECT
+		     pg_catalog.count(*),
+		     COALESCE(pg_catalog.max(version), 0),
+		     COALESCE(pg_catalog.bool_or(dirty), TRUE)
+		   FROM public.schema_migrations`,
+	).Scan(&rowCount, &version, &dirty); err != nil {
+		return ErrSchemaNotCurrent
+	}
+	if rowCount != 1 || version != latest || dirty {
+		return ErrSchemaNotCurrent
+	}
+	return nil
+}
+
+func withMigrator(ctx context.Context, db *sql.DB, fn func(*migrate.Migrate) error) error {
 	sourceDriver, err := iofs.New(migrationFS, ".")
 	if err != nil {
 		return err
@@ -89,7 +241,25 @@ func withMigrator(ctx context.Context, db *sql.DB, fn func(*migrate.Migrate) err
 		_ = conn.Close()
 	}()
 
-	driver, err := postgres.WithConnection(ctx, conn, &postgres.Config{})
+	if _, err = conn.ExecContext(
+		ctx,
+		`SELECT pg_catalog.set_config(
+		     'search_path',
+		     'public',
+		     FALSE
+		 )`,
+	); err != nil {
+		return err
+	}
+	if err = reconcileExistingBunSchema(ctx, conn); err != nil {
+		return err
+	}
+
+	driver, err := postgres.WithConnection(
+		ctx,
+		conn,
+		&postgres.Config{SchemaName: "public"},
+	)
 	if err != nil {
 		return err
 	}
@@ -128,7 +298,23 @@ func withMigrator(ctx context.Context, db *sql.DB, fn func(*migrate.Migrate) err
 // rows. The application data tables are what matter for boot compatibility, so we detect
 // the fully-initialized legacy schema directly and mark the new migration runner at the
 // Bun handoff version rather than at whatever the latest embedded migration happens to be.
-func reconcileExistingBunSchema(ctx context.Context, db *sql.DB) error {
+type databaseConnection interface {
+	ExecContext(
+		ctx context.Context,
+		query string,
+		args ...any,
+	) (sql.Result, error)
+	QueryRowContext(
+		ctx context.Context,
+		query string,
+		args ...any,
+	) *sql.Row
+}
+
+func reconcileExistingBunSchema(
+	ctx context.Context,
+	db databaseConnection,
+) error {
 	alreadyTracked, err := hasSchemaMigrationState(ctx, db)
 	if err != nil {
 		return err
@@ -146,7 +332,7 @@ func reconcileExistingBunSchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	if _, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
+		CREATE TABLE IF NOT EXISTS public.schema_migrations (
 			version bigint NOT NULL PRIMARY KEY,
 			dirty boolean NOT NULL
 		)`); err != nil {
@@ -154,16 +340,24 @@ func reconcileExistingBunSchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO schema_migrations (version, dirty)
+		INSERT INTO public.schema_migrations (version, dirty)
 		VALUES ($1, FALSE)
 		ON CONFLICT (version) DO UPDATE SET dirty = EXCLUDED.dirty
 	`, legacyBunBaselineVersion)
 	return err
 }
 
-func hasSchemaMigrationState(ctx context.Context, db *sql.DB) (bool, error) {
+func hasSchemaMigrationState(
+	ctx context.Context,
+	db databaseConnection,
+) (bool, error) {
 	var tableExists bool
-	if err := db.QueryRowContext(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&tableExists); err != nil {
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT pg_catalog.to_regclass(
+		     'public.schema_migrations'
+		 ) IS NOT NULL`,
+	).Scan(&tableExists); err != nil {
 		return false, err
 	}
 	if !tableExists {
@@ -171,18 +365,31 @@ func hasSchemaMigrationState(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT pg_catalog.count(*)
+		   FROM public.schema_migrations`,
+	).Scan(&count); err != nil {
 		return false, err
 	}
 
 	return count > 0, nil
 }
 
-func hasLegacySchema(ctx context.Context, db *sql.DB) (bool, error) {
+func hasLegacySchema(
+	ctx context.Context,
+	db databaseConnection,
+) (bool, error) {
 	checks := []string{
-		`SELECT to_regclass('public.installations') IS NOT NULL`,
-		`SELECT to_regclass('public.device_delivery_mechanisms') IS NOT NULL`,
-		`SELECT to_regclass('public.subscriptions') IS NOT NULL`,
+		`SELECT pg_catalog.to_regclass(
+		     'public.installations'
+		 ) IS NOT NULL`,
+		`SELECT pg_catalog.to_regclass(
+		     'public.device_delivery_mechanisms'
+		 ) IS NOT NULL`,
+		`SELECT pg_catalog.to_regclass(
+		     'public.subscriptions'
+		 ) IS NOT NULL`,
 		`SELECT EXISTS (
 			SELECT 1
 			FROM information_schema.columns
@@ -190,8 +397,12 @@ func hasLegacySchema(ctx context.Context, db *sql.DB) (bool, error) {
 			  AND table_name = 'subscriptions'
 			  AND column_name = 'is_silent'
 		)`,
-		`SELECT to_regclass('public.subscriptions_installation_id_topic_idx') IS NOT NULL`,
-		`SELECT to_regclass('public.subscription_hmac_keys') IS NOT NULL`,
+		`SELECT pg_catalog.to_regclass(
+		     'public.subscriptions_installation_id_topic_idx'
+		 ) IS NOT NULL`,
+		`SELECT pg_catalog.to_regclass(
+		     'public.subscription_hmac_keys'
+		 ) IS NOT NULL`,
 	}
 
 	for _, query := range checks {

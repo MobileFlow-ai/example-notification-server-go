@@ -2,11 +2,14 @@ package delivery
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
@@ -21,13 +24,55 @@ import (
 type ApnsDelivery struct {
 	apnsClient apnsClient
 	opts       options.ApnsOptions
+	now        func() time.Time
+	random     io.Reader
+	logger     *zap.Logger
+	reliable   *apnsReliability
 }
 
-type apnsClient interface {
+// APNSPushClient is the narrow provider boundary used by ApnsDelivery.
+// Exposing only PushWithContext permits deterministic provider substitution
+// without exposing credentials or the concrete APNS client implementation.
+type APNSPushClient interface {
 	PushWithContext(apns2.Context, *apns2.Notification) (*apns2.Response, error)
 }
 
-func NewApnsDelivery(_ *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, error) {
+type apnsClient = APNSPushClient
+
+var _ APNSPushClient = (*apns2.Client)(nil)
+
+// NewApnsDeliveryWithClient constructs APNS delivery around an already
+// configured provider client. The normal credential-loading constructor remains
+// the production default; this seam is intentionally limited to provider
+// substitution.
+func NewApnsDeliveryWithClient(
+	logger *zap.Logger,
+	opts options.ApnsOptions,
+	client APNSPushClient,
+) (*ApnsDelivery, error) {
+	if client == nil || opts.Topic == "" ||
+		(opts.Mode != "development" && opts.Mode != "production") {
+		return nil, errors.New("APNS provider configuration invalid")
+	}
+	if err := validateSecureAPNSOptions(opts); err != nil {
+		return nil, err
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &ApnsDelivery{
+		apnsClient: client,
+		opts:       opts,
+		now:        time.Now,
+		random:     rand.Reader,
+		logger:     logger,
+	}, nil
+}
+
+func NewApnsDelivery(logger *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, error) {
+	if err := validateSecureAPNSOptions(opts); err != nil {
+		return nil, err
+	}
 	bytes, err := loadApnsCertificate(opts)
 	if err != nil {
 		return nil, err
@@ -50,7 +95,27 @@ func NewApnsDelivery(_ *zap.Logger, opts options.ApnsOptions) (*ApnsDelivery, er
 	return &ApnsDelivery{
 		apnsClient: client,
 		opts:       opts,
+		now:        time.Now,
+		random:     rand.Reader,
+		logger:     logger,
 	}, nil
+}
+
+func validateSecureAPNSOptions(opts options.ApnsOptions) error {
+	if !opts.SecureWrapperRequired {
+		return nil
+	}
+	if opts.P8CertificateBase64 == "" ||
+		opts.P8Certificate != "" ||
+		opts.P8CertificateFilePath != "" ||
+		opts.KeyId == "" ||
+		opts.TeamId == "" ||
+		opts.Topic == "" ||
+		opts.SecureEnvironment == "" ||
+		opts.SecureEnvironment != opts.Mode {
+		return errors.New("secure APNS configuration invalid")
+	}
+	return nil
 }
 
 func loadApnsCertificate(opts options.ApnsOptions) ([]byte, error) {
@@ -76,22 +141,34 @@ func (a ApnsDelivery) CanDeliver(req interfaces.SendRequest) bool {
 	return req.Installation.DeliveryMechanism.Kind == interfaces.APNS
 }
 
-func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) error {
+func (a *ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) error {
 	if !pushpolicy.AllowsDelivery(ctx, req) {
 		return pushpolicy.ErrUnauthorized
 	}
 
-	notification := a.buildNotification(req)
-
-	res, err := a.apnsClient.PushWithContext(ctx, notification)
+	notification, err := a.buildNotification(req)
 	if err != nil {
 		return err
 	}
 
-	return apnsResponseError(res)
+	if a.reliable != nil {
+		return a.enqueueNotification(ctx, req, notification)
+	}
+
+	outcome := a.pushNotification(ctx, notification)
+	return apnsOutcomeError(outcome)
 }
 
-func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notification {
+func (a ApnsDelivery) buildNotification(
+	req interfaces.SendRequest,
+) (*apns2.Notification, error) {
+	if req.Subscription.SecureRoute != nil {
+		return a.buildSecureNotification(req)
+	}
+	if a.opts.SecureWrapperRequired {
+		return nil, ErrSecurePayloadInvalid
+	}
+
 	notificationPayload := payload.NewPayload().
 		Custom("topic", req.Topic).
 		Custom("messageKind", string(req.MessageContext.MessageType)).
@@ -130,15 +207,11 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 		Payload:     notificationPayload,
 		PushType:    pushType,
 		Priority:    priority,
-	}
+	}, nil
 }
 
 func apnsResponseError(res *apns2.Response) error {
-	if res == nil || res.Sent() {
-		return nil
-	}
-
-	return errors.New("APNS rejected notification")
+	return apnsOutcomeError(classifyAPNSResponse(res, nil))
 }
 
 func getApnsClient(authKey []byte, keyId, teamId string) (*apns2.Client, error) {

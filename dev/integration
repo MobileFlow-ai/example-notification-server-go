@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 #   client writes to xmtpd after cutover + d14n activation, and the
 #   notification server also listens directly to xmtpd with the v4 listener.
 MESSAGE_SOURCE="${1:-v3-direct}"
+# shellcheck source=dev/xnet-env
 source "$SCRIPT_DIR/xnet-env" "$MESSAGE_SOURCE"
 
 "$SCRIPT_DIR/down"

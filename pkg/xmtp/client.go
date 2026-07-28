@@ -72,12 +72,29 @@ func getCredentials(useTls bool) credentials.TransportCredentials {
 }
 
 func NewClient(ctx context.Context, apiAddress string, useTls bool, clientVersion, appVersion string) (v1.MessageApiClient, error) {
+	client, _, err := NewClientWithConn(
+		ctx,
+		apiAddress,
+		useTls,
+		clientVersion,
+		appVersion,
+	)
+	return client, err
+}
+
+func NewClientWithConn(
+	_ context.Context,
+	apiAddress string,
+	useTls bool,
+	clientVersion string,
+	appVersion string,
+) (v1.MessageApiClient, *grpc.ClientConn, error) {
 	conn, err := newConn(apiAddress, useTls, clientVersion, appVersion)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return v1.NewMessageApiClient(conn), nil
+	return v1.NewMessageApiClient(conn), conn, nil
 }
 
 func NewV4Client(ctx context.Context, apiAddress string, useTls bool, clientVersion, appVersion string) (notificationApi.NotificationApiClient, *grpc.ClientConn, error) {

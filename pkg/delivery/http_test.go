@@ -1,7 +1,10 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,11 +22,28 @@ import (
 
 func newTestRequest() interfaces.SendRequest {
 	shouldPush := true
+	hmacInputs := []byte("hmac-input")
+	hmacKey := bytes.Repeat([]byte{0x11}, sha256.Size)
+	otherKey := bytes.Repeat([]byte{0x22}, sha256.Size)
+	hash := hmac.New(sha256.New, otherKey)
+	_, _ = hash.Write(hmacInputs)
+	senderHmac := hash.Sum(nil)
+	expectedPeriod := 1
 	return interfaces.SendRequest{
 		IdempotencyKey: "test-key",
+		Subscription: interfaces.Subscription{
+			IsActive:              true,
+			ExpectedHmacKeyPeriod: &expectedPeriod,
+			HmacKey: &interfaces.HmacKey{
+				ThirtyDayPeriodsSinceEpoch: expectedPeriod,
+				Key:                        hmacKey,
+			},
+		},
 		MessageContext: interfaces.MessageContext{
 			MessageType: topics.V3Conversation,
 			ShouldPush:  &shouldPush,
+			HmacInputs:  &hmacInputs,
+			SenderHmac:  &senderHmac,
 		},
 	}
 }

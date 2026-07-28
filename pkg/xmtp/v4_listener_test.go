@@ -2,8 +2,6 @@ package xmtp
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"testing"
 	"time"
 
@@ -89,6 +87,12 @@ func registerV4Installation(t *testing.T, l *V4Listener, installationID string, 
 // subscribeV4ToTopic subscribes the given installation to a topic.
 func subscribeV4ToTopic(t *testing.T, l *V4Listener, installationID string, tp *topic.Topic, hmacKeys ...interfaces.HmacKey) {
 	t.Helper()
+	if len(hmacKeys) == 0 && tp.Kind() == topic.TopicKindGroupMessagesV1 {
+		hmacKeys = []interfaces.HmacKey{{
+			ThirtyDayPeriodsSinceEpoch: 0,
+			Key:                        testHmacKey(0x11),
+		}}
+	}
 	input := interfaces.SubscriptionInput{Topic: tp, HmacKeys: hmacKeys}
 	err := l.subscriptions.SubscribeWithMetadata(t.Context(), installationID, []interfaces.SubscriptionInput{input})
 	require.NoError(t, err)
@@ -106,6 +110,9 @@ func buildGroupMessageOriginatorEnvelope(
 	shouldPush bool,
 ) *envelopesProto.OriginatorEnvelope {
 	t.Helper()
+	if senderHmac == nil {
+		senderHmac = testSenderHmac(testHmacKey(0x22), data)
+	}
 
 	groupInput := &mlsV1.GroupMessageInput{
 		Version: &mlsV1.GroupMessageInput_V1_{
@@ -381,23 +388,21 @@ func TestV4Listener_ShouldPushFalse_SkipsDelivery(t *testing.T) {
 	mockDelivery.AssertNotCalled(t, "Send")
 }
 
-// TestV4Listener_HmacSenderFiltering tests that when the sender HMAC matches the subscription key,
-// delivery is skipped.
-func TestV4Listener_HmacSenderFiltering(t *testing.T) {
+// TestV4Listener_HmacSelfMessageSuppression verifies that an installation is
+// not notified for a message it originated. It makes no sender identity claim.
+func TestV4Listener_HmacSelfMessageSuppression(t *testing.T) {
 	mockDelivery := mocks.NewDelivery(t)
-	// No Send calls expected for the sender
+	// No Send calls are expected for the originating installation.
 
 	l := buildV4TestListener(t, mockDelivery)
 
 	groupID := []byte{0x99, 0xAA, 0xBB, 0xCC}
 	groupTopic := topic.NewTopic(topic.TopicKindGroupMessagesV1, groupID)
 
-	// Build HMAC key and compute sender HMAC over the message data
-	hmacKey := []byte("test-hmac-key")
+	// Build the installation HMAC key and the protocol's sender_hmac value.
+	hmacKey := testHmacKey(0x33)
 	messageData := []byte("group-message-data")
-	h := hmac.New(sha256.New, hmacKey)
-	h.Write(messageData)
-	senderHmac := h.Sum(nil)
+	senderHmac := testSenderHmac(hmacKey, messageData)
 
 	// Compute thirty day period
 	timestampNs := int64(time.Second)
@@ -413,8 +418,60 @@ func TestV4Listener_HmacSenderFiltering(t *testing.T) {
 	err := l.processOriginatorEnvelope(env)
 	require.NoError(t, err)
 
-	// The sender matches — should be filtered
+	// This installation originated the message, so delivery is suppressed.
 	mockDelivery.AssertNotCalled(t, "Send")
+}
+
+func TestV4Listener_PeriodRolloverFailsClosedUntilExactKeyRefresh(t *testing.T) {
+	mockDelivery := testutils.MockDeliveryAcceptAll(t)
+	l := buildV4TestListener(t, mockDelivery)
+
+	groupID := []byte{0xA9, 0xBA, 0xCB, 0xDC}
+	groupTopic := topic.NewTopic(topic.TopicKindGroupMessagesV1, groupID)
+	currentPeriod := 21
+	timestampNs := int64((time.Duration(currentPeriod)*30*24*time.Hour + time.Second).Nanoseconds())
+	subscriberKey := testHmacKey(0x51)
+	messageData := []byte("message-from-another-member")
+	senderHmac := testSenderHmac(testHmacKey(0x52), messageData)
+
+	registerV4Installation(t, l, "inst-rollover-v3", interfaces.PayloadFormatV3)
+	subscribeV4ToTopic(t, l, "inst-rollover-v3", groupTopic, interfaces.HmacKey{
+		ThirtyDayPeriodsSinceEpoch: currentPeriod - 1,
+		Key:                        subscriberKey,
+	})
+
+	env := buildGroupMessageOriginatorEnvelope(
+		t,
+		1,
+		81,
+		timestampNs,
+		groupID,
+		messageData,
+		senderHmac,
+		true,
+	)
+	require.NoError(t, l.processOriginatorEnvelope(env))
+	mockDelivery.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
+
+	require.NoError(t, l.subscriptions.SubscribeWithMetadata(
+		t.Context(),
+		"inst-rollover-v3",
+		[]interfaces.SubscriptionInput{{
+			Topic: groupTopic,
+			HmacKeys: []interfaces.HmacKey{{
+				ThirtyDayPeriodsSinceEpoch: currentPeriod,
+				Key:                        subscriberKey,
+			}},
+		}},
+	))
+
+	require.NoError(t, l.processOriginatorEnvelope(env))
+	mockDelivery.AssertNumberOfCalls(t, "Send", 1)
+	sendRequests := testutils.GetSendRequests(mockDelivery)
+	require.Len(t, sendRequests, 1)
+	require.NotNil(t, sendRequests[0].Subscription.ExpectedHmacKeyPeriod)
+	require.Equal(t, currentPeriod, *sendRequests[0].Subscription.ExpectedHmacKeyPeriod)
+	require.Equal(t, currentPeriod, sendRequests[0].Subscription.HmacKey.ThirtyDayPeriodsSinceEpoch)
 }
 
 // TestV4Listener_ProcessWelcomePointer_V3Format tests that an uncorrelated

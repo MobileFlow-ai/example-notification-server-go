@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +21,9 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	proto "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1"
 	protoconnect "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1/notificationsv1connect"
+	"github.com/xmtp/example-notification-server-go/pkg/registration"
 	"github.com/xmtp/example-notification-server-go/pkg/testutils"
+	"github.com/xmtp/example-notification-server-go/pkg/vault"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
@@ -37,6 +41,22 @@ type testContext struct {
 	installationsMock *mocks.Installations
 	subscriptionsMock *mocks.Subscriptions
 	apiServer         *ApiServer
+}
+
+type failingListener struct {
+	err error
+}
+
+func (l *failingListener) Accept() (net.Conn, error) {
+	return nil, l.err
+}
+
+func (l *failingListener) Close() error {
+	return nil
+}
+
+func (l *failingListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
 func matchTopics(expected ...*topicpkg.Topic) interface{} {
@@ -114,7 +134,7 @@ func setupTestWithListenerType(t *testing.T, listenerType interfaces.ListenerTyp
 	}
 	apiServer := NewApiServer(testutils.TestLogger(t), options.ApiOptions{Port: port}, installationsMock, subscriptionsMock, listenerType)
 	require.NoError(t, apiServer.SetListener(listener))
-	apiServer.Start()
+	require.NoError(t, apiServer.Start())
 	time.Sleep(50 * time.Millisecond)
 
 	t.Cleanup(func() {
@@ -140,7 +160,7 @@ func Test_SetListenerAfterStartReturnsError(t *testing.T) {
 		mocks.NewSubscriptions(t),
 		interfaces.ListenerTypeV3,
 	)
-	apiServer.Start()
+	require.NoError(t, apiServer.Start())
 	defer apiServer.Stop()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -151,6 +171,54 @@ func Test_SetListenerAfterStartReturnsError(t *testing.T) {
 
 	err = apiServer.SetListener(listener)
 	require.EqualError(t, err, "api server already started")
+}
+
+func Test_StartFailsSynchronouslyWhenPortIsOccupied(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, occupied.Close())
+	}()
+	port := occupied.Addr().(*net.TCPAddr).Port
+	server := NewApiServer(
+		testutils.TestLogger(t),
+		options.ApiOptions{Port: port},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV3,
+	)
+
+	err = server.Start()
+	require.ErrorIs(t, err, ErrAPIUnavailable)
+	require.Nil(t, server.httpServer)
+	require.False(t, server.prepared)
+}
+
+func TestUnexpectedServeFailureSignalsWithoutLoggingCause(t *testing.T) {
+	const sensitiveCause = "sensitive-listener-address-or-token"
+	observedCore, logs := observer.New(zap.DebugLevel)
+	server := NewApiServer(
+		zap.New(observedCore),
+		options.ApiOptions{},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV3,
+	)
+	require.NoError(t, server.SetListener(&failingListener{
+		err: errors.New(sensitiveCause),
+	}))
+	require.NoError(t, server.Start())
+	t.Cleanup(server.Stop)
+
+	select {
+	case <-server.Failed():
+	case <-time.After(time.Second):
+		t.Fatal("API failure was not signaled")
+	}
+	for _, entry := range logs.All() {
+		rendered := fmt.Sprintf("%s %#v", entry.Message, entry.ContextMap())
+		require.NotContains(t, rendered, sensitiveCause)
+	}
 }
 
 func Test_RegisterInstallation(t *testing.T) {
@@ -243,6 +311,47 @@ func TestApiLogsRedactRegistrationAndSubscriptionSecrets(t *testing.T) {
 		require.NotContains(t, rendered, deviceToken)
 		require.NotContains(t, rendered, rawTopic)
 		require.NotContains(t, rendered, hmacSecret)
+	}
+}
+
+func TestPrivacySafeHTTPHandlerRedactsPanicAndRemoteAddress(t *testing.T) {
+	const (
+		sensitiveRemote = "203.0.113.42:49152"
+		sensitiveNeedle = "sensitive-topic-token-installation"
+	)
+	observedCore, logs := observer.New(zap.DebugLevel)
+	handler := privacySafeHTTPHandler(
+		zap.New(observedCore),
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			panic(sensitiveNeedle)
+		}),
+	)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"https://bridge.invalid/refresh?secret="+sensitiveNeedle,
+		strings.NewReader(sensitiveNeedle),
+	)
+	request.RemoteAddr = sensitiveRemote
+	recorder := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		handler.ServeHTTP(recorder, request)
+	})
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	require.Equal(t, "internal_error\n", recorder.Body.String())
+	require.Len(t, logs.All(), 1)
+
+	secondRecorder := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		handler.ServeHTTP(secondRecorder, request)
+	})
+	require.Equal(t, http.StatusInternalServerError, secondRecorder.Code)
+	require.Len(t, logs.All(), 1)
+
+	for _, entry := range logs.All() {
+		rendered := fmt.Sprintf("%s %#v", entry.Message, entry.ContextMap())
+		require.NotContains(t, rendered, sensitiveRemote)
+		require.NotContains(t, rendered, sensitiveNeedle)
 	}
 }
 
@@ -607,5 +716,157 @@ func Test_Readyz_ReflectsReadyCheck(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	require.Equal(t, "listener not ready", string(body))
+	require.Equal(t, "not_ready", string(body))
+}
+
+func Test_Livez_DoesNotRestartForXMTPOutage(t *testing.T) {
+	ctx := setupTest(t)
+	ctx.apiServer.SetReadyCheck(func() bool { return false })
+
+	resp, err := ctx.httpClient.Get(
+		fmt.Sprintf("http://127.0.0.1:%d/livez", ctx.apiServer.port),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "ok", string(body))
+	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+}
+
+func Test_XMTPHealth_FailsClosedWhileDisconnected(t *testing.T) {
+	ctx := setupTest(t)
+	// Aggregate storage/retention readiness is not evidence that an XMTP
+	// listener exists or is connected.
+	ctx.apiServer.SetReadyCheck(func() bool { return true })
+
+	resp, err := ctx.httpClient.Get(
+		fmt.Sprintf("http://127.0.0.1:%d/health/xmtp", ctx.apiServer.port),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	require.Equal(t, "xmtp_unavailable", string(body))
+	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+}
+
+func Test_XMTPHealth_ReportsConnected(t *testing.T) {
+	ctx := setupTest(t)
+	ctx.apiServer.SetXMTPReadyCheck(func() bool { return true })
+
+	resp, err := ctx.httpClient.Get(
+		fmt.Sprintf("http://127.0.0.1:%d/health/xmtp", ctx.apiServer.port),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "ok", string(body))
+}
+
+func Test_XMTPHealth_IsIndependentFromAggregateReadiness(t *testing.T) {
+	ctx := setupTest(t)
+	ctx.apiServer.SetReadyCheck(func() bool { return false })
+	ctx.apiServer.SetXMTPReadyCheck(func() bool { return true })
+
+	readyResponse, err := ctx.httpClient.Get(
+		fmt.Sprintf("http://127.0.0.1:%d/readyz", ctx.apiServer.port),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, readyResponse.Body.Close())
+	}()
+	require.Equal(t, http.StatusServiceUnavailable, readyResponse.StatusCode)
+
+	xmtpResponse, err := ctx.httpClient.Get(
+		fmt.Sprintf("http://127.0.0.1:%d/health/xmtp", ctx.apiServer.port),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, xmtpResponse.Body.Close())
+	}()
+	require.Equal(t, http.StatusOK, xmtpResponse.StatusCode)
+}
+
+type secureMountBackend struct {
+	welcomeCalls int
+}
+
+func (b *secureMountBackend) Refresh(
+	context.Context,
+	vault.RefreshRequest,
+) (*vault.RefreshResult, error) {
+	return &vault.RefreshResult{}, nil
+}
+
+func (b *secureMountBackend) AuthorizeWelcome(
+	context.Context,
+	vault.WelcomeAuthorizationRequest,
+) error {
+	b.welcomeCalls++
+	return nil
+}
+
+func TestSecureRegistrationMountsWelcomeAuthorizationEndpoint(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	backend := &secureMountBackend{}
+	handler, err := registration.NewHandler(
+		backend,
+		"0123456789abcdef0123456789abcdef",
+	)
+	require.NoError(t, err)
+	server := NewApiServer(
+		testutils.TestLogger(t),
+		options.ApiOptions{Port: port},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV3,
+	)
+	server.EnableSecureRegistration(handler)
+	require.NoError(t, server.SetListener(listener))
+	require.NoError(t, server.Start())
+	t.Cleanup(server.Stop)
+	time.Sleep(50 * time.Millisecond)
+
+	body := strings.NewReader(`{
+		"schema_version":1,
+		"topic_b64":"AAE",
+		"authorization":{"schema_version":1}
+	}`)
+	request, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf(
+			"http://127.0.0.1:%d%s",
+			port,
+			registration.WelcomePath,
+		),
+		body,
+	)
+	require.NoError(t, err)
+	request.Header.Set(
+		"Authorization",
+		"Bearer 0123456789abcdef0123456789abcdef",
+	)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, response.Body.Close())
+	}()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, 1, backend.welcomeCalls)
 }

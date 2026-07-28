@@ -18,6 +18,194 @@ type DeviceDeliveryMechanism struct {
 	Token          string
 }
 
+type HytchPushVaultAccessAudit struct {
+	EventID           []byte
+	RequestID         []byte
+	Environment       int16
+	Actor             string
+	Purpose           int16
+	DataClass         int16
+	CoarseEventHour   time.Time
+	Action            int16
+	ResultCountBucket int16
+	ExpiresOn         time.Time
+}
+
+type HytchPushVaultAccessRequest struct {
+	RequestID              []byte
+	Environment            int16
+	Purpose                int16
+	DataClass              int16
+	RequesterActor         string
+	TicketReference        string
+	Hypothesis             int16
+	WindowStart            time.Time
+	WindowEnd              time.Time
+	ApproverActor          sql.NullString
+	OversightBroadcastHour sql.NullTime
+	CoarseCreatedHour      time.Time
+	RoleExpiresAt          sql.NullTime
+	State                  int16
+}
+
+type HytchPushVaultDeletionTombstone struct {
+	Environment    int16
+	TargetKind     int16
+	TargetIdentity []byte
+	KeyVersion     int32
+	FenceEpoch     int64
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+}
+
+type HytchPushVaultDeliveryDedupe struct {
+	LeaseID           []byte
+	SourceEventLookup []byte
+	Environment       int16
+	TrafficClass      int16
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+}
+
+type HytchPushVaultDeliveryJob struct {
+	JobID              []byte
+	LeaseID            []byte
+	InstallationLookup []byte
+	EncryptedJob       []byte
+	Environment        int16
+	State              int16
+	Attempts           int16
+	RetryExponent      int16
+	AvailableAt        time.Time
+	ExpiresAt          time.Time
+	CreatedAt          time.Time
+	TrafficClass       sql.NullInt16
+	FinalReason        sql.NullInt16
+}
+
+type HytchPushVaultInstallationState struct {
+	InstallationLookup   []byte
+	InstallationIdentity []byte
+	IncarnationLookup    []byte
+	LookupKeyEpoch       int64
+	Generation           int64
+	IdempotencyDigest    []byte
+	ControlEventDigest   []byte
+	EncryptedApnsToken   []byte
+	Environment          int16
+	PayloadSchema        int16
+	AgePolicy            int16
+	PolicyEpoch          int64
+	State                int16
+	EncryptionKeyVersion int32
+	CreatedAt            time.Time
+	RefreshedAt          time.Time
+	ExpiresAt            time.Time
+	ControlExpiresAt     time.Time
+	RevokedAt            sql.NullTime
+}
+
+type HytchPushVaultLegacyRoutingActivation struct {
+	Singleton   bool
+	ActivatedAt time.Time
+}
+
+type HytchPushVaultOperationalAggregate struct {
+	BucketDay      time.Time
+	BucketHour     int16
+	EventName      int16
+	Component      int16
+	Environment    int16
+	TrafficClass   int16
+	Outcome        int16
+	CountBucket    int16
+	SizeBucket     sql.NullInt16
+	LatencyBucket  sql.NullInt16
+	PrivacyVersion int16
+	ExpiresOn      time.Time
+}
+
+type HytchPushVaultRetentionState struct {
+	Environment     int16
+	LastStartedAt   sql.NullTime
+	LastCompletedAt sql.NullTime
+	NextDeadlineAt  sql.NullTime
+	IsSafe          bool
+	FixedOutcome    int16
+}
+
+type HytchPushVaultRouteKeyHistory struct {
+	Environment        int16
+	RouteIdentity      []byte
+	RouteKeyEpoch      int64
+	RouteKeyCommitment []byte
+	UpdatedAt          time.Time
+	ExpiresAt          time.Time
+}
+
+type HytchPushVaultSubscriptionLease struct {
+	LeaseID                    []byte
+	InstallationLookup         []byte
+	RouteIdentity              []byte
+	TopicLookup                []byte
+	LookupKeyEpoch             int64
+	EncryptedTopic             []byte
+	EncryptedRouteKey          []byte
+	EncryptedHmacKeys          []byte
+	EncryptedReceiveCapability []byte
+	Environment                int16
+	PayloadSchema              int16
+	TopicKind                  int16
+	PushMode                   int16
+	State                      int16
+	Generation                 int64
+	PolicyEpoch                int64
+	RouteKeyEpoch              int64
+	EncryptedNonceState        []byte
+	EncryptionKeyVersion       int32
+	IssuedAt                   time.Time
+	RefreshedAt                time.Time
+	ExpiresAt                  time.Time
+	ControlExpiresAt           time.Time
+	RevokedAt                  sql.NullTime
+}
+
+type HytchPushVaultVaultKeyBinding struct {
+	Environment          int16
+	LookupRootCommitment []byte
+	BoundAt              time.Time
+}
+
+type HytchPushVaultWelcomeAuthorization struct {
+	AuthorizationID        []byte
+	LeaseID                []byte
+	Environment            int16
+	EnvelopeLookup         []byte
+	EncryptedAuthorization []byte
+	PolicyEpoch            int64
+	IssuedAt               time.Time
+	ExpiresAt              time.Time
+	ConsumedAt             sql.NullTime
+}
+
+type HytchPushVaultWelcomeBudget struct {
+	Environment       int16
+	DestinationLookup []byte
+	MinuteWindowStart time.Time
+	MinuteCount       int16
+	HourWindowStart   time.Time
+	HourCount         int16
+	CircuitOpenUntil  sql.NullTime
+	UpdatedAt         time.Time
+	ExpiresAt         time.Time
+}
+
+type HytchPushVaultWelcomeGlobalCircuit struct {
+	Environment      int16
+	CircuitOpenUntil sql.NullTime
+	UpdatedAt        time.Time
+}
+
 type Installation struct {
 	ID            string
 	CreatedAt     time.Time

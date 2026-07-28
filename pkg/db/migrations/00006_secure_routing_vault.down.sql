@@ -1,0 +1,1 @@
+DROP SCHEMA IF EXISTS hytch_push_vault CASCADE;

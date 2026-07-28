@@ -52,6 +52,10 @@ FROM ROWS FROM (
 ON CONFLICT (subscription_id, thirty_day_periods_since_epoch) DO UPDATE
 SET key = EXCLUDED.key, updated_at = NOW();
 
+-- name: DeleteSubscriptionHmacKeys :exec
+DELETE FROM subscription_hmac_keys
+WHERE subscription_id = ANY(sqlc.arg(subscription_ids)::bigint[]);
+
 -- name: BatchInsertSubscriptions :exec
 INSERT INTO subscriptions (installation_id, topic, is_active, is_silent)
 SELECT sqlc.arg(installation_id)::text, t.topic, TRUE, FALSE

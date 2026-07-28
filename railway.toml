@@ -3,8 +3,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "/usr/bin/notifications-server --api --xmtp-listener --listener-type=v3 --xmtp-listener-tls --xmtp-address=grpc.dev.xmtp.network:443 --apns-enabled"
+startCommand = "/usr/bin/notifications-server --api --xmtp-listener --listener-type=v3 --xmtp-listener-tls --xmtp-address=grpc.dev.xmtp.network:443 --hytch-secure-vault --bridge-environment=development --apns-mode=development --bridge-teen-conversation-mode=disabled"
 healthcheckPath = "/readyz"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
+drainingSeconds = 30

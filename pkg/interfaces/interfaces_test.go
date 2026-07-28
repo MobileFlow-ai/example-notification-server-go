@@ -1,6 +1,9 @@
 package interfaces
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"testing"
 
@@ -8,6 +11,41 @@ import (
 	proto "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1"
 	"github.com/xmtp/xmtpd/pkg/topic"
 )
+
+func TestHmacKeyIsValid(t *testing.T) {
+	require.True(t, HmacKey{
+		ThirtyDayPeriodsSinceEpoch: 1,
+		Key:                        bytes.Repeat([]byte{0x01}, sha256.Size),
+	}.IsValid())
+	require.False(t, HmacKey{
+		ThirtyDayPeriodsSinceEpoch: -1,
+		Key:                        bytes.Repeat([]byte{0x01}, sha256.Size),
+	}.IsValid())
+	require.False(t, HmacKey{
+		ThirtyDayPeriodsSinceEpoch: 1,
+		Key:                        []byte("short"),
+	}.IsValid())
+}
+
+func TestMessageContextRequiresWellFormedSenderHmac(t *testing.T) {
+	key := bytes.Repeat([]byte{0x01}, sha256.Size)
+	data := []byte("message")
+	hash := hmac.New(sha256.New, key)
+	_, _ = hash.Write(data)
+	senderHmac := hash.Sum(nil)
+	messageContext := MessageContext{
+		HmacInputs: &data,
+		SenderHmac: &senderHmac,
+	}
+
+	require.True(t, messageContext.HasValidSenderHmac())
+	require.True(t, messageContext.IsSender(key))
+
+	malformed := []byte("short")
+	messageContext.SenderHmac = &malformed
+	require.False(t, messageContext.HasValidSenderHmac())
+	require.False(t, messageContext.IsSender(key))
+}
 
 type subscriptionJSON struct {
 	Topic         string `json:"topic"`

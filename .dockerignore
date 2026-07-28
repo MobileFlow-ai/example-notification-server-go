@@ -1,5 +1,15 @@
+/.git
+/.vscode
+/.zed
+/.env*
+/.envrc
+/.direnv
 /integration
 docker-compose.yml
 proto
 docs
 dist
+**/*.key
+**/*.p8
+**/*.p12
+**/*.pem
