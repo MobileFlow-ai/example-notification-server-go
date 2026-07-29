@@ -51,9 +51,6 @@ func (s *Store) AuthorizeWelcome(
 	if s == nil || !s.welcomeEnabled {
 		return ErrWelcomeUnavailable
 	}
-	if err := s.RequireRetentionSafe(ctx); err != nil {
-		return ErrWelcomeUnavailable
-	}
 	now := s.now().UTC()
 	parsedTopic, envelopeDigest, err := s.validateWelcomeRequest(
 		request,
@@ -61,6 +58,9 @@ func (s *Store) AuthorizeWelcome(
 	)
 	if err != nil || parsedTopic.Kind() != topicpkg.TopicKindWelcomeMessagesV1 {
 		return ErrWelcomeInvalid
+	}
+	if err = s.RequireRetentionSafe(ctx); err != nil {
+		return ErrWelcomeUnavailable
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -347,19 +347,17 @@ func (s *Store) validateWelcomeLeaseCapability(
 		capability,
 		s.authorityKeys,
 		authority.VerifyOptions{
-			Now:                            now,
-			MaxTTL:                         time.Minute,
-			ExpectedEnvironment:            s.environment,
-			ExpectedInstallationID:         authorization.InstallationID,
-			ExpectedAccountIncarnationID:   authorization.AccountIncarnationID,
-			ExpectedTopicDigest:            hex.EncodeToString(topicDigestBytes[:]),
-			ExpectedConversationCommitment: authorization.ExpectedConversationCommitment,
+			Now:                          now,
+			MaxTTL:                       time.Minute,
+			ExpectedEnvironment:          s.environment,
+			ExpectedInstallationID:       authorization.InstallationID,
+			ExpectedAccountIncarnationID: authorization.AccountIncarnationID,
+			ExpectedTopicDigest:          hex.EncodeToString(topicDigestBytes[:]),
 		},
 	); err != nil ||
 		capability.PolicyEpoch != lease.policyEpoch ||
 		capability.ConversationGrantVersion != authorization.GrantVersion ||
-		capability.PushMode != authority.PushModeSuppressed ||
-		!sameConversationCommitment(capability, authorization) {
+		capability.PushMode != authority.PushModeSuppressed {
 		return ErrWelcomeInvalid
 	}
 	return nil
@@ -784,19 +782,17 @@ func (s *Store) openWelcomeRoute(
 		capability,
 		s.authorityKeys,
 		authority.VerifyOptions{
-			Now:                            now,
-			MaxTTL:                         time.Minute,
-			ExpectedEnvironment:            s.environment,
-			ExpectedInstallationID:         authorization.InstallationID,
-			ExpectedAccountIncarnationID:   authorization.AccountIncarnationID,
-			ExpectedTopicDigest:            hex.EncodeToString(topicDigestBytes[:]),
-			ExpectedConversationCommitment: authorization.ExpectedConversationCommitment,
+			Now:                          now,
+			MaxTTL:                       time.Minute,
+			ExpectedEnvironment:          s.environment,
+			ExpectedInstallationID:       authorization.InstallationID,
+			ExpectedAccountIncarnationID: authorization.AccountIncarnationID,
+			ExpectedTopicDigest:          hex.EncodeToString(topicDigestBytes[:]),
 		},
 	); err != nil ||
 		capability.PolicyEpoch != row.leasePolicyEpoch ||
 		capability.ConversationGrantVersion != authorization.GrantVersion ||
 		capability.PushMode != authority.PushModeSuppressed ||
-		!sameConversationCommitment(capability, authorization) ||
 		!capabilityMatchesRoute(
 			capability,
 			routeKey,
@@ -825,20 +821,6 @@ func (s *Store) openWelcomeRoute(
 		return nil, nil, nonceState{}, ErrWelcomeUnavailable
 	}
 	return routeKey, capabilityBytes, nonce, nil
-}
-
-func sameConversationCommitment(
-	capability authority.ReceiveCapabilityV1,
-	authorization authority.WelcomeAuthorizationV1,
-) bool {
-	if capability.ExpectedConversationCommitment == "" ||
-		authorization.ExpectedConversationCommitment == "" {
-		return false
-	}
-	return hmac.Equal(
-		[]byte(capability.ExpectedConversationCommitment),
-		[]byte(authorization.ExpectedConversationCommitment),
-	)
 }
 
 // finalizeWelcomeEnqueue consumes the one-use grant and destination budget

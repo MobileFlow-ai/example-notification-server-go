@@ -6,9 +6,9 @@ type ApiOptions struct {
 }
 
 type ApnsOptions struct {
-	Enabled                bool   `long:"apns-enabled" env:"APNS_ENABLED" description:"Enable APNS"`
+	Enabled                bool   `long:"apns-enabled" env:"APNS_ENABLED" description:"Compatibility flag; true is rejected until the reviewed A9 and Gate 8 activation is implemented"`
 	SecureWrapperRequired  bool   `long:"apns-secure-wrapper-required" env:"APNS_SECURE_WRAPPER_REQUIRED" description:"Reject APNS requests that do not carry a Gate 8 secure route"`
-	SecureEnvironment      string `long:"apns-secure-environment" env:"APNS_SECURE_ENVIRONMENT" choice:"development" choice:"production" default:"development" description:"Environment bound into Gate 8 APNS wrappers"`
+	SecureEnvironment      string `long:"apns-secure-environment" env:"APNS_SECURE_ENVIRONMENT" choice:"dev" choice:"production" default:"dev" description:"Logical environment bound into Gate 8 APNS wrappers"`
 	RatePerSecond          int    `long:"apns-rate-per-second" env:"APNS_RATE_PER_SECOND" default:"50" description:"Provisional process-wide APNS token rate per second"`
 	RateBurst              int    `long:"apns-rate-burst" env:"APNS_RATE_BURST" default:"50" description:"Provisional process-wide APNS token bucket burst"`
 	MaxConcurrency         int    `long:"apns-max-concurrency" env:"APNS_MAX_CONCURRENCY" default:"8" description:"Provisional maximum concurrent APNS requests"`
@@ -34,7 +34,7 @@ type FcmOptions struct {
 }
 
 type XmtpOptions struct {
-	ListenerEnabled bool   `long:"xmtp-listener" description:"Enable the XMTP listener to actually send notifications. Requires APNSOptions to be configured"`
+	ListenerEnabled bool   `long:"xmtp-listener" description:"Consume XMTP messages and dispatch to configured delivery services; zero delivery services is allowed for blocked audit mode"`
 	UseTls          bool   `long:"xmtp-listener-tls" description:"Whether to connect to XMTP network using TLS"`
 	GrpcAddress     string `short:"x" long:"xmtp-address" env:"XMTP_GRPC_ADDRESS" description:"Address (including port) of XMTP GRPC server"`
 	NumWorkers      int    `long:"num-workers" description:"Number of workers used to process messages" default:"50"`
@@ -51,14 +51,14 @@ type HttpDeliveryOptions struct {
 
 type VaultOptions struct {
 	Enabled                 bool   `long:"hytch-secure-vault" env:"HYTCH_SECURE_VAULT" description:"Enable authenticated Gate 8 routing vault and disable legacy registration APIs"`
-	Environment             string `long:"bridge-environment" env:"BRIDGE_ENVIRONMENT" choice:"development" choice:"production" default:"development" description:"Logical bridge environment bound into signed authority and routing aliases"`
+	Environment             string `long:"bridge-environment" env:"BRIDGE_ENVIRONMENT" choice:"dev" choice:"production" default:"dev" description:"Logical bridge environment bound into signed authority and routing aliases"`
 	MasterKeysJSON          string `long:"vault-master-keys-json" env:"BRIDGE_VAULT_MASTER_KEYS_JSON" description:"Versioned base64url 32-byte vault root keys as JSON"`
 	LookupKey               string `long:"vault-lookup-key" env:"BRIDGE_VAULT_LOOKUP_KEY" description:"Base64url 32-byte domain-separated lookup root"`
 	AuthorityPublicKeysJSON string `long:"authority-public-keys-json" env:"BRIDGE_AUTHORITY_PUBLIC_KEYS_JSON" description:"Versioned Ed25519 authority public keys as JSON"`
 	APIBearerToken          string `long:"bridge-api-bearer-token" env:"BRIDGE_API_BEARER_TOKEN" description:"Internal modern-api to bridge service credential"`
 	LeaseTTLHours           int    `long:"vault-lease-ttl-hours" env:"BRIDGE_VAULT_LEASE_TTL_HOURS" default:"168" description:"Authenticated subscription lease TTL, capped at 168 hours"`
 	TeenConversationMode    string `long:"bridge-teen-conversation-mode" env:"BRIDGE_TEEN_CONVERSATION_MODE" choice:"disabled" choice:"enabled" default:"disabled" description:"Enable teen XMTP conversation routing only after the required safety review"`
-	WelcomeEnabled          bool   `long:"bridge-welcome-enabled" env:"BRIDGE_WELCOME_ENABLED" description:"Enable Welcome preauthorization and routing only after signed cross-repository conformance vectors are acknowledged"`
+	WelcomeEnabled          bool   `long:"bridge-welcome-enabled" env:"BRIDGE_WELCOME_ENABLED" description:"Compatibility flag; true is rejected because Welcome routing is unavailable in this build"`
 }
 
 type IncidentAccessOptions struct {
@@ -87,4 +87,18 @@ type Options struct {
 	LogLevel                    string `long:"log-level" env:"LOG_LEVEL" description:"log-level" choice:"debug" choice:"info" choice:"error" default:"info"`
 	CreateMigration             string `long:"create-migration" description:"create a migration with the given name"`
 	MigrateOnly                 bool   `long:"migrate-only" description:"Apply database migrations and exit without starting runtime surfaces"`
+	PreflightLegacyRetirement   bool   `long:"preflight-legacy-retirement" description:"Run the read-only legacy routing retirement preflight and exit"`
+}
+
+// APNSModeForBridgeEnvironment keeps the signed/wrapper environment vocabulary
+// independent from the APNS provider endpoint vocabulary.
+func APNSModeForBridgeEnvironment(environment string) (string, bool) {
+	switch environment {
+	case "dev":
+		return "development", true
+	case "production":
+		return "production", true
+	default:
+		return "", false
+	}
 }

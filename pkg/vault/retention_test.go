@@ -154,7 +154,7 @@ func TestNewRetentionSweeperRejectsInvalidConfiguration(t *testing.T) {
 		db,
 		RetentionOptions{
 			SweepInterval:        30 * time.Second,
-			Environment:          "development",
+			Environment:          "dev",
 			Lookup:               lookup,
 			EncryptionKeyVersion: 1,
 		},
@@ -166,7 +166,7 @@ func TestNewRetentionSweeperRejectsInvalidConfiguration(t *testing.T) {
 		db,
 		RetentionOptions{
 			SweepInterval:        2 * time.Hour,
-			Environment:          "development",
+			Environment:          "dev",
 			Lookup:               lookup,
 			EncryptionKeyVersion: 1,
 		},

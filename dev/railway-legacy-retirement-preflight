@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+
+failure_output='preflight=fail'
+success_tail='transaction_read_only=true
+schema_migrations_ready=true
+only_client_session=true
+no_logical_subscription=true
+no_enabled_event_trigger=true
+legacy_relations_ready=true
+activation_marker_empty=true
+activation_functions_ready=true
+activation_triggers_ready=true
+no_named_non_owner_public_create=true
+preflight=pass'
+newline='
+'
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+
+if [ -n "${BRIDGE_SERVER_BINARY:-}" ]; then
+  bridge_binary=$BRIDGE_SERVER_BINARY
+else
+  bridge_binary="$script_dir/../dist/server"
+fi
+
+if [ ! -x "$bridge_binary" ]; then
+  printf '%s\n' "$failure_output" >&2
+  exit 1
+fi
+
+preflight_output=
+if ! preflight_output="$(
+  "$bridge_binary" --preflight-legacy-retirement 2>/dev/null
+)"; then
+  printf '%s\n' "$failure_output" >&2
+  exit 1
+fi
+
+database_line=${preflight_output%%"$newline"*}
+output_tail=${preflight_output#*"$newline"}
+case "$database_line" in
+  'database="'*'"') ;;
+  *)
+    printf '%s\n' "$failure_output" >&2
+    exit 1
+    ;;
+esac
+if [ "$output_tail" != "$success_tail" ]; then
+  printf '%s\n' "$failure_output" >&2
+  exit 1
+fi
+
+printf '%s\n' "$preflight_output"

@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,16 +24,17 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 	lookup, err := NewLookupKey(repeatedBytes(32, 0x42))
 	require.NoError(t, err)
 	store := &Store{
-		db:            db,
-		encryption:    keyring,
-		lookup:        lookup,
-		environment:   "development",
-		environmentID: environmentDevelopment,
-		now:           func() time.Time { return now },
-		random:        &sequenceReader{},
+		db:                db,
+		encryption:        keyring,
+		lookup:            lookup,
+		environment:       "dev",
+		environmentID:     environmentDevelopment,
+		lookupEnvironment: "development",
+		now:               func() time.Time { return now },
+		random:            &sequenceReader{},
 	}
 	sweeper, err := NewRetentionSweeper(db, RetentionOptions{
-		Environment:          "development",
+		Environment:          "dev",
 		Lookup:               lookup,
 		EncryptionKeyVersion: keyring.ActiveVersion(),
 		Now:                  func() time.Time { return now },
@@ -187,10 +189,73 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 	welcomeJob.PushType = "background"
 	welcomeJob.Priority = 5
 	welcomeJob.TrafficClass = DeliveryTrafficWelcome
+	welcomeJob.Expiration = now.Add(45 * time.Second)
+	welcomeJob.WelcomeAuthorizationID = repeatedBytes(16, 0x2f)
+	welcomeJob.WelcomeEnvelopeDigest = repeatedBytes(32, 0x30)
+
+	// Simulate one Welcome job persisted by a pre-hard-close build. The current
+	// kill switch must reject it at the final authority boundary without
+	// spending an APNS attempt, even though the claim was already reserved.
+	t.Run("hard-closed Welcome invalidates persisted queued work", func(t *testing.T) {
+		persistedWelcomeJobID := repeatedBytes(16, 0x2e)
+		serializedWelcome, marshalErr := json.Marshal(welcomeJob)
+		require.NoError(t, marshalErr)
+		encryptedWelcome, sealErr := keyring.Seal(
+			deliveryJobContext(persistedWelcomeJobID),
+			serializedWelcome,
+		)
+		require.NoError(t, sealErr)
+		_, insertErr := db.ExecContext(
+			t.Context(),
+			`INSERT INTO hytch_push_vault.delivery_jobs (
+			     job_id, lease_id, encrypted_job, environment,
+			     state, attempts, available_at, expires_at, created_at,
+			     traffic_class
+			 ) VALUES ($1,$2,$3,$4,$5,0,$6,$7,$6,$8)`,
+			persistedWelcomeJobID,
+			welcomeLeaseID,
+			encryptedWelcome,
+			store.environmentID,
+			deliveryJobPending,
+			now,
+			welcomeJob.Expiration,
+			int16(DeliveryTrafficWelcome),
+		)
+		require.NoError(t, insertErr)
+
+		claimedWelcome, claimErr := store.ClaimDeliveryJobs(
+			t.Context(),
+			1,
+			2*time.Second,
+		)
+		require.NoError(t, claimErr)
+		require.Len(t, claimedWelcome, 1)
+		require.Equal(t, persistedWelcomeJobID, claimedWelcome[0].JobID)
+		attemptGuard, valid, acquireErr := store.AcquireDeliveryAttempt(
+			t.Context(),
+			claimedWelcome[0],
+		)
+		require.NoError(t, acquireErr)
+		require.False(t, valid)
+		require.Nil(t, attemptGuard)
+		var persistedAttempts int
+		require.NoError(t, db.QueryRowContext(
+			t.Context(),
+			`SELECT attempts
+			   FROM hytch_push_vault.delivery_jobs
+			  WHERE job_id = $1`,
+			persistedWelcomeJobID,
+		).Scan(&persistedAttempts))
+		require.Zero(t, persistedAttempts)
+		require.NoError(t, store.FinalizeDeliveryJob(
+			t.Context(),
+			persistedWelcomeJobID,
+			DeliveryFinalSafetyInvalidated,
+		))
+	})
 
 	// The same opaque source event remains domain-separated across Welcome and
-	// conversation leases/traffic classes. Authorized Welcome enqueue itself
-	// is covered by the dedicated atomic-reservation integration tests.
+	// conversation leases/traffic classes.
 	const sharedSourceEvent = "opaque-source-event"
 	_, err = store.EnqueueDeliveryJob(
 		t.Context(),

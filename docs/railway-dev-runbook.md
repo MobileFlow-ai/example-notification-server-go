@@ -4,6 +4,21 @@ This runbook is internal and applies only to Railway `dev`, XMTP dev, and the
 APNS sandbox. It does not authorize a production or public-cohort deployment.
 All numeric limits below are provisional defaults pending measurement.
 
+## Current deployment gate
+
+This revision is **not yet authorized for APNS egress or database retirement**.
+The bridge-local subscription API is not bound to modern-api's authoritative
+A9 roster lease, and the server-owned adapter is still a design proposal rather
+than committed code on both sides. Welcome is compiled hard-closed. The exact
+zero/one live provider-call proof also requires a versioned Gate 8 amendment
+and recorded Security and Privacy approval; current Gate 8 has no debug or
+internal-cohort exception.
+
+Do not activate the legacy-retirement function, deploy with
+`APNS_ENABLED=true`, or claim end-to-end readiness until those blockers are
+closed and this section is updated in the same reviewed change. Read-only
+Railway and database audits remain permitted.
+
 ## Safety contract
 
 The bridge sees encrypted XMTP outer envelopes. It cannot decrypt a content
@@ -25,7 +40,7 @@ type or identify a sender.
 - Missing, false, malformed, stale, unknown, or ambiguous authority fails
   closed.
 - Adult receive and policy authority is capped at 60 seconds; teen authority is
-  capped at 30 seconds. Exact Welcome preauthorization rejects teen state.
+  capped at 30 seconds. Welcome delivery is unavailable in this build.
 - A conversation APNS alert is always generic and contains no name or content.
   This permits the client's amended expired-projection behavior without
   leaking a sender or message.
@@ -42,8 +57,10 @@ corresponding modern-api/iOS vector suite passes.
   replicas, but APNS is still at-least-once across a crash after Apple accepts a
   notification and before the success deletion commits.
 - Use the checked-in `railway.toml`. It runs API plus V3 listener against XMTP
-  dev, enables the secure vault, and uses `APNS_ENABLED` as the delivery kill
-  switch.
+  dev and enables the secure vault. This blocked audit build configures no
+  delivery service: `APNS_ENABLED` must remain false, and startup rejects true.
+  The listener may consume XMTP for health/audit behavior with zero delivery
+  services.
 - Railway's deployment healthcheck is `GET /readyz`; Railway evaluates it while
   bringing up a deployment, not as a continuous restart probe. The checked-in
   restart policy responds to process exit. Continuous `/readyz` monitoring must
@@ -51,10 +68,10 @@ corresponding modern-api/iOS vector suite passes.
 - `GET /livez` is operator-visible process liveness and stays `200 ok` during
   an XMTP outage, avoiding an operator-induced restart loop.
 - `GET /readyz` is aggregate readiness. It is `503 not_ready` when XMTP is
-  disconnected, retention is unsafe, APNS egress has stopped, or the
-  deletion-only invalid-token worker is unavailable. When the private
-  incident-access listener is enabled, its failure also removes readiness and
-  terminates the runtime.
+  disconnected, retention is unsafe, a configured APNS worker has stopped, or
+  the deletion-only invalid-token worker is unavailable. This hard-closed build
+  has no APNS worker to evaluate. When the private incident-access listener is
+  enabled, its failure also removes readiness and terminates the runtime.
 - `GET /health/xmtp` reports only the XMTP dependency: `200 ok` or
   `503 xmtp_unavailable`. modern-api consumes this endpoint.
 - All three responses are content-free. Liveness does not authorize delivery.
@@ -73,7 +90,7 @@ Required secure bridge variables:
 
 - `DB_CONNECTION_STRING`
 - `HYTCH_SECURE_VAULT=true`
-- `BRIDGE_ENVIRONMENT=development`
+- `BRIDGE_ENVIRONMENT=dev`
 - `BRIDGE_VAULT_MASTER_KEYS_JSON`
 - `BRIDGE_VAULT_LOOKUP_KEY`
 - `BRIDGE_AUTHORITY_PUBLIC_KEYS_JSON`
@@ -81,6 +98,13 @@ Required secure bridge variables:
 - `BRIDGE_VAULT_LEASE_TTL_HOURS=168`
 - `BRIDGE_WELCOME_ENABLED=false`
 - `BRIDGE_TEEN_CONVERSATION_MODE=disabled`
+
+`dev` is the signed A9/Gate 8 wire value. For upgrade continuity, the vault
+continues to derive lookup identities, route-key history, and deletion
+tombstones under its original internal `development` namespace while APNS
+wrappers and signed authority use `dev`. This is deliberate and regression
+tested: changing the internal namespace requires a separately reviewed
+live-row and tombstone migration, not a configuration rename.
 
 `DB_CONNECTION_STRING` must authenticate as a restricted runtime role. That
 role owns no schema, table, trigger, or function; is not a member of the
@@ -95,18 +119,32 @@ migration job. Never add it to the bridge runtime service. Runtime startup
 fails if that owner credential is present, and secure runtime startup never
 applies migrations.
 
-Welcome authorization is independently fail-closed. Keep
-`BRIDGE_WELCOME_ENABLED=false` until the A9 issuer contract, fixed commitment
-vector, and secure handoff have been acknowledged and exercised end to end.
-Turning off Welcome does not weaken conversation policy checks or
-invalid-token deletion.
+Welcome is hard-closed at four boundaries: startup rejects
+`BRIDGE_WELCOME_ENABLED=true`, the production store constructor rejects an
+enabled Welcome path, atomic refresh rejects every Welcome topic before
+retention lookup or persistence, and the registration handler never attaches a
+Welcome authorizer. The authenticated compatibility endpoint returns a fixed
+unavailable response before reading its body. Dormant types and unit fixtures
+are not a deployment contract. Turning off Welcome does not weaken conversation
+policy checks or invalid-token deletion.
 
 Teen XMTP conversations and inbound Welcomes remain disabled pending the
 required safety review. The 30-second teen authority ceiling is implemented
 for the future reviewed conversation enablement; it is not permission to turn
 the mode on in this dev deployment.
 
-Required APNS sandbox variables:
+Current blocked-state APNS setting:
+
+- `APNS_ENABLED=false`
+
+Do not load or use APNS provider credentials until A9/G8 implementation and
+activation are approved in a reviewed change. The current binary also rejects
+`APNS_ENABLED=true` at runtime startup, so a stale Railway variable fails
+closed rather than enabling provider egress. Maintenance-only migration and
+preflight modes cannot initialize APNS.
+
+Post-gate APNS sandbox variables, after that startup rejection is removed in
+the same reviewed implementation:
 
 - `APNS_ENABLED=true`
 - `APNS_MODE=development`
@@ -166,11 +204,30 @@ before APNS or XMTP starts. Startup validates the oversight destination's
 syntax but does not claim that the remote endpoint is reachable. A broadcaster
 failure during approval denies that approval without exposing vault data.
 
-## Internal API contracts
+## Bridge-local API proposal
 
-All three endpoints require
-`Authorization: Bearer <BRIDGE_API_BEARER_TOKEN>`, reject unknown JSON fields,
-bound request sizes, return fixed errors, and set `Cache-Control: no-store`.
+These routes are a fail-closed bridge stub, not the authoritative A9 contract.
+They require `Authorization: Bearer <BRIDGE_API_BEARER_TOKEN>`, reject unknown
+JSON fields, bound request sizes, return fixed errors, and set
+`Cache-Control: no-store`. The static bearer and local signed objects do not
+replace modern-api's session-bound A9 API or its signed `hytch.roster-lease`.
+
+The agreed direction is a modern-api durable outbox feeding a bridge-owned,
+audience-bound server adapter. That adapter must transactionally derive
+authority from the exact active A9 conversation generation, roster version,
+account incarnation, and transport claim. The raw `roster_digest` remains only
+with modern-api authority; the bridge assertion carries a domain-separated
+keyed roster commitment instead. Subscription replacement and its final
+pre-egress use must linearize in one vault CAS bound to
+`installation_binding_id + topic_key_epoch + topic_binding`. The adapter must
+apply a contiguous revoke-wins control stream, stop advancing watermarks while
+modern-api authority is uncertain, and fail egress closed on expiry, a stream
+gap, or an epoch change. The corrected, reviewed v1 ACK is:
+<https://mattermost.gocybered.com/pl/ys8kjnuju7yojfd75frgh9m9kr>. It
+supersedes the observer, roster-field, and subscription-CAS portions of the
+earlier proposal. It records design agreement only—not implementation,
+migration, conformance vectors, or end-to-end proof. It is **UNIMPLEMENTED**,
+Welcome remains closed, and deployment is therefore blocked.
 
 ### Atomic subscription replacement
 
@@ -201,9 +258,18 @@ bound request sizes, return fixed errors, and set `Cache-Control: no-store`.
 ```
 
 The list is a full atomic replacement, not a one-topic mutation. One logical DM
-may span multiple topics. A suppressed Welcome topic is required. Route-key or
-APNS-token rotation cancels queued work bound to the old key/token; an ordinary
-fresh-control refresh preserves valid retries.
+may span multiple conversation topics, and an explicit empty list removes the
+last conversation route. Every Welcome topic is rejected before retention
+lookup or persistence; callers must not send a suppressed Welcome sentinel,
+route key, or capability. Route-key or APNS-token rotation cancels queued work
+bound to the old key/token; an ordinary fresh-control refresh preserves valid
+retries.
+
+`ReceiveCapabilityV1` uses Gate 6's exact v1 field set. It does not contain the
+obsolete `expected_conversation_commitment`. Environment is exactly
+`dev | production`; `installation_id` is exactly 64 lowercase hexadecimal
+characters, and `account_incarnation_id` is a canonical lowercase hyphenated
+UUID. Those local checks are necessary but not A9 authority.
 
 ### Policy advancement
 
@@ -213,64 +279,20 @@ The body is one signed `PolicyControlV1`. A newer revoke disables lookup first,
 cancels leases/jobs through the vault transaction, and cannot be reversed by a
 stale generation or a same-epoch active replay.
 
-### Exact Welcome preauthorization
+### Welcome compatibility endpoint
 
-`POST /internal/v1/xmtp-push/welcomes:authorize`
+`POST /internal/v1/xmtp-push/welcomes:authorize` is retained only to fail old
+internal callers closed. After authenticating the service bearer, it returns a
+fixed `503` before reading the request body. There is no operator setting that
+can enable it in this build.
 
-```text
-{
-  schema_version: 1,
-  topic_b64,
-  authorization: WelcomeAuthorizationV1
-}
-```
-
-`WelcomeAuthorizationV1` contains `schema_version`, `environment`,
-`installation_id`, `account_incarnation_id`, `policy_epoch`, `topic_digest`,
-`outer_envelope_digest`, `expected_conversation_commitment`, `grant_version`,
-`nonce`, `issued_at`, `expires_at`, `signing_key_id`, `algorithm`, and
-`signature`.
-
-The Ed25519 signature domain is the exact byte string
-`Hytch safety welcome authorization v1\x00`. The listener digests are:
-
-```text
-V3: SHA-256("Hytch exact Welcome outer envelope v3\x00" ||
-           topic.Bytes() || env.Message)
-V4: SHA-256("Hytch exact Welcome outer envelope v4\x00" ||
-           topic.Bytes() || origEnv.Bytes())
-```
-
-The trusted modern-api issuer must validate the publisher/conversation
-association before signing. An `expected_conversation_id` echoed by the caller
-is insufficient authority. After that validation, modern-api and iOS compute:
-
-```text
-SHA-256("Hytch expected conversation commitment v1\x00" ||
-       u64be(len(environment)) || environment ||
-       u64be(len(installation_id)) || installation_id ||
-       u64be(len(account_incarnation_id)) || account_incarnation_id ||
-       u64be(len(canonical_expected_conversation_id)) ||
-       canonical_expected_conversation_id)
-```
-
-Each length counts exact bounded-ASCII bytes. The result is lower-case hex in
-both signed objects. It is mandatory in the encrypted Welcome-path
-`ReceiveCapabilityV1`, optional for ordinary conversation capabilities, and
-must exactly match the Welcome authorization. The raw conversation identifier
-is not sent to the bridge. The fixed commitment vector for
-`development`, `installation`, `incarnation`, `conversation` is
-`5c98d79b0069383245a2fe22c161c922c244d3a9557340ff8ce2c88e542287bc`.
-
-The authorization is encrypted and exact-envelope bound. Route resolution
-allocates a nonce but does not consume the grant. The grant and budget are
-finalized in the same PostgreSQL transaction that inserts the encrypted durable
-APNS job, so enqueue failure/backpressure rolls them back; a budget denial
-intentionally consumes the one-use grant with no job. Destination limits are
-database-shared at 1/minute and 5/hour. A breach opens one global 30-minute
-circuit observed by all replicas. Destination pseudonyms rotate on UTC-hour
-boundaries and budget rows expire within one hour. Unmatched, duplicate,
-expired, teen, ambiguous, or exhausted cases produce no egress.
+XMTP iOS 4.10.0 has no proven exact pre-import Welcome correlator, and the
+production product-authority adapter is unavailable. Outer-envelope byte
+correlation or a caller-supplied conversation commitment is not evidence that
+the envelope belongs to the authorized Hytch conversation. Any future
+enablement requires a new reviewed contract and hostile-unrelated-group,
+byte-identity, replay, crash-recovery, and atomic-consume evidence across the
+owning repositories.
 
 ## Private incident-access contract
 
@@ -308,10 +330,10 @@ Raw topic, topic digest, installation ID, APNS token, exact content type, exact
 size, and sender/content are absent.
 
 - Conversation: generic `New message` alert, mutable content, alert priority.
-- Matched Welcome: silent background wakeup, background priority.
 - If the complete inline wrapper would exceed 4096 bytes, mode selection occurs
   before encryption and the bridge emits a foreground-sync wrapper with no XMTP
-  envelope. The 8192-byte Welcome regression covers the former APNS 413.
+  envelope. A dormant 8192-byte Welcome unit regression preserves the former
+  APNS 413 fix, but Welcome is not a runnable deployment path.
 - Alias, AEAD, environment, day, route-key epoch, nonce, sequence, replay, or
   key-state failure is deny, never plaintext fallback.
 - The Go reference opener requires an injected atomic compare-and-advance replay
@@ -362,9 +384,10 @@ size, and sender/content are absent.
 - Invalid-token erasure runs in a deletion-only worker with no APNS client or
   credential dependency. It synchronously recovers available markers before
   retention readiness, continues while retention is unsafe, and remains active
-  when `APNS_ENABLED=false`; the kill switch disables egress, not deletion
-  authority. Its retry exponent is persisted independently from the three-call
-  APNS ceiling and reaches the configured 30-second capped backoff.
+  while `APNS_ENABLED=false`; the current startup hard-close disables egress,
+  not deletion authority. Its retry exponent is persisted independently from
+  the three-call APNS ceiling and reaches the configured 30-second capped
+  backoff.
 - Queue capacity rejects new delivery with fixed backpressure. It never spills
   plaintext to another queue.
 - Process, listener, APNS, retention, and erasure goroutine boundaries recover
@@ -378,10 +401,10 @@ modern-api Alembic.
 
 - Active encrypted lease: at most 7 days from authenticated refresh.
 - Encrypted delivery job: at most 15 minutes and three APNS attempts.
-- Welcome authorization/budget: short-lived; hourly rotating destination
-  pseudonym and at most one-hour budget retention; the 30-minute circuit is
-  shared by all replicas in one environment but isolated between development
-  and production; no payload log or payload-bearing DLQ.
+- Dormant Welcome authorization/budget tables remain retention-bounded for
+  migration compatibility; no runtime path can create Welcome authority in
+  this build. The 30-minute circuit state is isolated between `dev` and
+  `production`; no payload log or payload-bearing DLQ exists.
 - Raw provider IP: the application stores none. Railway/provider enforcement of
   the 24-hour ceiling must be verified separately.
 - Encrypted backup: at most 7 days.
@@ -440,18 +463,48 @@ unknown replica.
    `/usr/bin/notifications-server --migrate-only`. This applies migrations and
    exits without starting an API, listener, worker, or delivery client. Do not
    configure this owner DSN on the bridge service.
-4. Through the migration-owner connection, call
+4. After migration and before activation, run the exact candidate binary's
+   checked-in, read-only database preflight from the private job where
+   `MIGRATION_DB_CONNECTION_STRING` is already loaded:
+
+   ```bash
+   /usr/bin/notifications-server --preflight-legacy-retirement
+   ```
+
+   For a local candidate built at `dist/server`, the equivalent guarded wrapper
+   is `./dev/railway-legacy-retirement-preflight`. Set
+   `BRIDGE_SERVER_BINARY` only to an explicitly verified candidate path. The
+   connection string remains in the process environment and is never passed as
+   an argument or printed.
+
+   Require `preflight=pass` and record its safe boolean statuses plus the
+   JSON-escaped current database name. The preflight requires migration 11
+   clean, only its own client session, no logical subscription, no enabled
+   event trigger, all four exact owner-held legacy tables, an empty activation
+   marker with exactly the non-null `singleton BOOLEAN` and
+   `activated_at TIMESTAMPTZ` columns, the exact activation/rejection function
+   bodies and security flags, all three `ENABLE ALWAYS` marker triggers, and no
+   named non-owner `CREATE` grant on `public`. The Go driver opens a
+   `SERIALIZABLE READ ONLY` transaction; the mode never migrates, invokes the
+   activation function, or starts a runtime surface. Any connection, query,
+   catalog, close, or check failure emits only the fixed `preflight=fail`.
+
+   This result is necessary but not sufficient for retirement. Railway UI
+   evidence must separately prove the dev-only physical service and volume
+   topology, a verified recoverable backup, no copied external DSNs or
+   production contamination, and zero bridge replicas before activation.
+5. Through the migration-owner connection, call
    `hytch_push_vault.activate_legacy_routing_retirement` with the exact literal
    `RETIRE LEGACY PLAINTEXT ROUTING FROM <verified-database-name>`. Do not
    compute or copy the database name from an unverified deployment context.
    The one-shot function validates the literal, rejects logical subscriptions
    and enabled event triggers, checks exact ordinary/permanent ownership, takes
-   parent-first `ACCESS EXCLUSIVE` locks, and drops child-first without
-   `CASCADE`. It verifies all four relations are absent, writes the immutable
-   marker, and revokes public `CREATE` on `public`. A dependent object, owner
-   mismatch, catalog anomaly, or any other error rolls back every drop and the
-   marker transition together.
-5. Create a distinct non-owner runtime credential. Grant it `CONNECT`,
+   parent-first `ACCESS EXCLUSIVE` locks, rechecks the exact two-column marker
+   shape, and drops child-first without `CASCADE`. It verifies all four
+   relations are absent, writes the immutable marker, and revokes public
+   `CREATE` on `public`. A dependent object, owner mismatch, catalog anomaly,
+   or any other error rolls back every drop and the marker transition together.
+6. Create a distinct non-owner runtime credential. Grant it `CONNECT`,
    `USAGE` on `hytch_push_vault`, required DML on secure-vault tables, and
    read-only access to `schema_migrations` and the marker. On
    `access_audit`, grant only `SELECT, INSERT`; explicitly revoke
@@ -464,7 +517,7 @@ unknown replica.
    execution, role membership in the owner, replication, bypass-RLS, and
    ownership. Store only this restricted DSN as `DB_CONNECTION_STRING` on the
    bridge service.
-6. Start the secure service and require the fixed schema and legacy-routing
+7. Start the secure service and require the fixed schema and legacy-routing
    gates plus the exact append-only audit function/trigger/ACL gate to pass
    before proceeding. Once activated, migration 00008 refuses its own down path
    even if the marker has been tampered with, because any missing legacy
@@ -545,63 +598,116 @@ export/import and destructive restore rehearsal remain manual and
 
 ## Deploy to Railway dev
 
-1. Confirm the selected Railway project, environment, and service are exactly
+1. Require a committed and locally tested server-owned A9 adapter on both
+   modern-api and the bridge. Its control watermark, subscription binding,
+   revoke ordering, and final pre-egress check must match the reviewed
+   cross-track contract. A Mattermost proposal alone does not satisfy this
+   gate.
+2. Confirm the selected Railway project, environment, and service are exactly
    the dev bridge. Confirm the PostgreSQL service is the dedicated,
-   legacy-retired dev database, APNS mode is `development`, and replica count is
-   one.
-2. Confirm all required variable names are present without displaying values.
-3. Run every QA gate locally. GitHub-hosted Actions are not QA:
+   legacy-retired dev database, logical bridge environment is `dev`, APNS mode
+   is `development`, and replica count is one.
+3. Confirm all required variable names are present without displaying values.
+4. Run every QA gate locally. GitHub-hosted Actions are not QA:
+
+   Go database tests expect PostgreSQL on `localhost:25432` with the repository
+   test credential. Either verify that compatible isolated test service is
+   already ready or run `./dev/up` after reviewing its local Docker and Nix
+   side effects. `./dev/up` can install or replace the pinned `xnet-cli` in the
+   user's Nix profile. Do not point these tests at a shared or non-test
+   database.
 
    ```bash
+   git diff --check
+   test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
    ./dev/gen-sqlc
+   git diff --exit-code -- pkg/db/queries
    VAULT_INTEGRATION_TESTS=1 go test -p 1 -count=1 ./...
    go vet ./...
    ./dev/build
+   golangci-lint version | rg -q 'version 2\.9\.0([[:space:]]|$)'
    golangci-lint run --timeout=5m --config dev/.golangci.yaml
    ./dev/lint-shellcheck
+   shellcheck dev/railway-legacy-retirement-preflight
    buf lint proto
    buf breaking proto \
      --against 'https://github.com/xmtp/example-notification-server-go.git#branch=main,subdir=proto'
+   docker buildx inspect --bootstrap
    ./dev/integration v3-direct
    ./dev/integration v4-with-migrator
    docker build --platform linux/amd64 .
    docker build --platform linux/arm64 .
    ```
 
-4. For the first secure deployment only, complete the separately authorized
+   Use exactly `golangci-lint` v2.9.0, matching the checked-in workflow.
+   `./dev/lint-shellcheck` discovers only tracked files, so keep the explicit
+   wrapper check until `dev/railway-legacy-retirement-preflight` is tracked.
+   Confirm the active Buildx builder reports both `linux/amd64` and
+   `linux/arm64`; cross-platform builds require working QEMU/binfmt support
+   where the Docker runtime does not provide it.
+
+   The integration scripts tear down and recreate local Docker test state,
+   including volumes, and their xnet setup can modify the user's Nix profile.
+   Confirm those exact local resources are disposable before running either
+   integration command.
+
+   Before deployment, require
+   `git status --porcelain=v1 --untracked-files=all` to be empty and rerun the
+   gates against that committed state. If interim QA intentionally exercises a
+   dirty tree, record the commit plus a digest of its full tracked patch and an
+   explicit untracked-file manifest; that evidence is not deployable-source
+   provenance and does not replace the clean committed rerun.
+
+5. For the first secure deployment only, complete the separately authorized
    one-time legacy routing retirement above. Routine redeploys only verify its
    marker and the absence of all retired relations; they never delete data.
-5. Deploy the exact committed source state. Record its commit and Railway
+6. Deploy the exact committed source state. Record its commit and Railway
    deployment ID.
-6. Require `/livez=200`, `/readyz=200`, and `/health/xmtp=200`.
-7. Run the APNS sandbox proof below before directing another dev installation
-   to the service.
+7. Require `/livez=200`, `/readyz=200`, and `/health/xmtp=200`.
+8. Run the APNS sandbox proof below before directing another dev installation
+   to the service. Current Gate 8 blocks that proof until the exact-purpose
+   amendment is approved.
 
 ## APNS sandbox proof
 
-Use a dedicated dev installation and sanitized identifiers. Do not store the
-device token, topic, route key, HMAC key, signed capability, or ciphertext in
-the evidence file. Welcome steps remain blocked while
-`BRIDGE_WELCOME_ENABLED=false`; enable them only after signed cross-repository
-vectors and the A9 contract are acknowledged.
+This proof is currently **BLOCKED**. Gate 8 treats exact delivery frequency as
+sensitive and has no debug exception; a renamed boolean still reveals whether
+the provider was called zero or one time. Existing aggregates deliberately
+cannot prove exact counts, and APNS acceptance does not prove client receipt,
+sync, decryption, or rendering.
 
-1. Submit one atomic replacement with at least two stitched DM topics and one
-   suppressed Welcome topic. Record only HTTP status, lease count bucket, and
-   UTC-hour bucket.
-2. Preauthorize one exact Welcome, publish that exact envelope, and prove one
-   silent APNS acceptance plus client sync/decryption.
-3. Replay the same Welcome and prove zero additional APNS calls.
-4. Publish a visible conversation from another installation with
-   `shouldPush=true`; prove one APNS acceptance and one client decryption.
-5. Publish a self-originated conversation with the exact-period HMAC; prove zero
-   APNS calls.
-6. Publish the control and ephemeral outer fixtures with `shouldPush=false`;
-   prove zero APNS calls.
-7. Exercise an 8192-byte Welcome and record that the serialized APNS payload is
-   below 4096 bytes and accepted without 413.
-8. Capture `/livez`, `/readyz`, and `/health/xmtp`.
-9. Scan logs for denylisted raw values using ephemeral local needles; commit
-   only pass/fail and fixed outcome classes.
+The proposed `G8-DP01` amendment must receive recorded Security and Privacy
+approval before any live observer exists. It must be dev/APNS-sandbox only,
+single-replica, volatile, short-lived, authenticated, default-off, and
+purpose-bound to fixed synthetic scenarios. Its terminal result must
+distinguish `VALID_ZERO`, `VALID_ONE`, and `INCONCLUSIVE`; restart, replica
+ambiguity, `MULTIPLE`, retry, unmatched or unrelated provider traffic,
+overflow, lost state, and every other observer failure are
+`INCONCLUSIVE`—never a passing zero or one.
+
+After that approval and the A9 adapter gate, use a dedicated synthetic dev
+installation and never persist the device token, topic, route key, HMAC key,
+signed authority, ciphertext, observer handle, or provider identifier:
+
+1. Verify the exact deployment, one ready replica, autoscaling off, APNS
+   sandbox, and an independently fresh A9 control watermark.
+2. Submit one atomic replacement with at least two stitched DM topics and no
+   Welcome topic.
+3. Publish a visible conversation from another installation with
+   `shouldPush=true`; require `VALID_ONE` provider acceptance and pair it with
+   client-track sync/decryption evidence.
+4. Publish a self-originated conversation with the exact-period HMAC; require
+   `VALID_ZERO`.
+5. Publish official control and ephemeral outer fixtures with
+   `shouldPush=false`; require `VALID_ZERO` for each.
+6. Capture `/livez`, `/readyz`, and `/health/xmtp`, then scan logs with
+   ephemeral local needles and retain only approved fixed verdicts and coarse
+   evidence fields.
+
+Welcome positive, replay, and 8192-byte live steps are excluded. The compact
+wakeup size regression remains unit-tested, but live Welcome proof is
+impossible while the product-authority adapter and exact pre-import correlator
+are unavailable.
 
 State each result at its tested scope. Any device Notification Center,
 decrypt/render, backup, provider-retention, crash-duplicate, V4, or multi-replica
@@ -610,24 +716,33 @@ named.
 
 Bridge-owned relabeled negative fixtures do not settle official codec
 conformance. Capture official V3/V4 control and ephemeral envelopes from the
-owning client/server tracks and rerun step 6 before claiming that scope.
+owning client/server tracks and rerun step 5 before claiming that scope.
 
 ## Diagnose a missing notification
 
-Do not start by querying raw vault data.
+In this hard-closed build, a missing APNS notification is the expected result.
+`APNS_ENABLED=true` is rejected before runtime initialization, so diagnosis
+ends by confirming the exact deployed revision and that startup rejection. Do
+not add credentials, bypass the guard, or query raw vault data. The audit-only
+checks that remain meaningful are `/livez`, `/readyz`, `/health/xmtp`, and
+sanitized fixed logs.
+
+The following procedure is reserved for a later reviewed post-gate revision
+that removes the startup rejection and implements A9/Gate 8. It does not
+authorize those actions on this revision:
 
 1. Check `/livez`, `/readyz`, and `/health/xmtp`. XMTP `503` with liveness `200`
    is a dependency outage, not a process crash.
 2. Confirm `APNS_ENABLED=true`, APNS sandbox mode/topic, listener type, and
    required secure variable presence. Inspect names only.
 3. Confirm the atomic refresh returned success and included every stitched DM
-   topic plus the suppressed Welcome topic.
+   topic with no Welcome topic.
 4. Confirm policy/capability freshness and policy epoch. Adult state older than
    60 seconds and teen state older than 30 seconds is intentionally denied.
 5. For a conversation, verify explicit `shouldPush=true`, a well-formed
    sender_hmac input, and an HMAC key for the envelope's exact 30-day period.
-6. For a Welcome, verify exact preauthorization arrived before the stream,
-   digest domain/version, one-use state, age policy, and circuit budget.
+6. A missing Welcome notification is expected in this build. Do not attempt to
+   enable or bypass the hard-close to diagnose it.
 7. Inspect only the allowlisted aggregate outcomes: queue accepted or
    backpressure; local rate delayed or cancelled; and terminal rejected, retry
    exhausted, TTL expired, safety invalidated, or material invalid. Queue/rate
@@ -643,13 +758,20 @@ Do not start by querying raw vault data.
    the production blockers in the retention/access section are closed.
 
 Expected missing notifications include false/unknown `shouldPush`, self-origin,
-stale key period, expired authority, revoked/blocked state, duplicate Welcome,
-teen Welcome, circuit-open Welcome, oversized foreground-sync requiring client
-fetch, invalid token, and queue backpressure.
+stale key period, expired authority, revoked/blocked state, every Welcome,
+oversized foreground-sync requiring client fetch, invalid token, and queue
+backpressure.
 
 ## Diagnose a spurious notification
 
-A spurious push is a safety defect.
+A spurious push attributed to this exact hard-closed build is first a deployment
+provenance or configuration-integrity defect: the binary rejects APNS
+activation and has no provider client. Preserve only sanitized revision and
+deployment identifiers, set/keep `APNS_ENABLED=false`, and verify the running
+image digest before any other diagnosis.
+
+The following response procedure applies only to a later reviewed post-gate
+revision that permits APNS egress:
 
 1. Set `APNS_ENABLED=false` on the dev bridge and redeploy the same revision.
    Confirm the listener remains available but APNS has zero calls.
@@ -660,8 +782,7 @@ A spurious push is a safety defect.
    bridge bypass occurred. The bridge cannot determine plaintext content or a
    sender.
 4. Check for stale/same-epoch revoke replay, route-key/token rotation, duplicate
-   queue claim, one-use Welcome consumption, and authorization fingerprint
-   mutation.
+   queue claim, and authorization fingerprint mutation.
 5. Reproduce with a synthetic fixture and add a zero-APNS-call regression
    before re-enabling delivery.
 6. If Apple accepted a job immediately before a crash, classify possible
@@ -670,18 +791,28 @@ A spurious push is a safety defect.
 
 ## Rollback
 
-1. Set `APNS_ENABLED=false` first if the rollback is caused by spurious egress.
-2. Redeploy the immediately preceding known-good dev deployment. Do not roll
-   back database migrations destructively; the down path is tested only for
-   development migration verification. The append-only audit-barrier down
-   migration refuses to run while any audit history exists.
+1. Keep `APNS_ENABLED=false`. This revision already rejects true; a running
+   provider client indicates that a different or modified revision is deployed.
+2. Treat database migrations as monotonic. Do not blindly redeploy the
+   immediately preceding binary: migration 11 advances the exact schema
+   version and hardened activation-function hash, so the version-10 binary
+   cannot start against it. Migration 11's security-monotonic down file also
+   cannot make that binary compatible; it moves the version boundary without
+   restoring the weaker function. Keep migration 11 applied and build a
+   roll-forward application revert on the current schema/attestation contract,
+   then run the full local QA matrix before deployment. If no tested
+   schema-compatible build exists, keep the dev service and APNS egress off.
+   Never use a destructive database down migration as incident rollback; the
+   append-only audit-barrier down migration also refuses to run while any audit
+   history exists.
 3. Keep one replica and secure-vault mode. Never re-enable legacy plaintext
    registration or delivery.
 4. Verify `/livez`, `/readyz`, `/health/xmtp`, atomic refresh, conversation
-   positive, control/ephemeral negative, self-message negative, and Welcome
-   single-use/size regressions.
-5. Re-enable `APNS_ENABLED` only after the safe revision and negative fixtures
-   are green.
+   positive, control/ephemeral negative, self-message negative, and the Welcome
+   configuration hard-close.
+5. Only a later reviewed revision that removes the startup hard-close may
+   re-enable `APNS_ENABLED`, after its A9/Gate 8 activation and negative
+   fixtures are green.
 
 ## Secret and key rotation
 

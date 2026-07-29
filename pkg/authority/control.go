@@ -2,7 +2,6 @@ package authority
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"time"
@@ -56,9 +55,7 @@ type PolicyVerifyOptions struct {
 }
 
 func (c PolicyControlV1) SigningBytes() ([]byte, error) {
-	if c.SchemaVersion != 1 ||
-		c.PolicyEpoch == 0 ||
-		c.PolicyEpoch > maxIJSONInteger {
+	if !validPolicyControlSigningShape(c) {
 		return nil, ErrPolicyControlInvalid
 	}
 	unsigned := struct {
@@ -98,7 +95,13 @@ func VerifyPolicyControl(
 	keys map[string]ed25519.PublicKey,
 	opts PolicyVerifyOptions,
 ) error {
-	if !validPolicyControlShape(control) {
+	if !validPolicyControlShape(control) ||
+		(opts.ExpectedEnvironment != "" &&
+			!ValidEnvironment(opts.ExpectedEnvironment)) ||
+		(opts.ExpectedInstallationID != "" &&
+			!ValidInstallationID(opts.ExpectedInstallationID)) ||
+		(opts.ExpectedAccountIncarnationID != "" &&
+			!ValidAccountIncarnationID(opts.ExpectedAccountIncarnationID)) {
 		return ErrPolicyControlInvalid
 	}
 	if control.Algorithm != "Ed25519" {
@@ -108,8 +111,8 @@ func VerifyPolicyControl(
 	if !ok || len(publicKey) != ed25519.PublicKeySize {
 		return ErrPolicyControlKeyState
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(control.Signature)
-	if err != nil || len(signature) != ed25519.SignatureSize {
+	signature, canonical := decodeCanonicalRawURLBase64(control.Signature)
+	if !canonical || len(signature) != ed25519.SignatureSize {
 		return ErrPolicyControlInvalid
 	}
 	signingBytes, err := control.SigningBytes()
@@ -156,9 +159,17 @@ func VerifyPolicyControl(
 }
 
 func validPolicyControlShape(control PolicyControlV1) bool {
+	return validPolicyControlSigningShape(control) &&
+		validASCIIField(control.Signature, 1, maxCapabilityFieldBytes)
+}
+
+func validPolicyControlSigningShape(control PolicyControlV1) bool {
 	if control.SchemaVersion != 1 ||
 		control.PolicyEpoch == 0 ||
-		control.PolicyEpoch > maxIJSONInteger {
+		control.PolicyEpoch > maxIJSONInteger ||
+		!ValidEnvironment(control.Environment) ||
+		!ValidInstallationID(control.InstallationID) ||
+		!ValidAccountIncarnationID(control.AccountIncarnationID) {
 		return false
 	}
 	if control.State != PolicyStateActive && control.State != PolicyStateRevoked {
@@ -168,14 +179,10 @@ func validPolicyControlShape(control PolicyControlV1) bool {
 		return false
 	}
 	for _, value := range []string{
-		control.Environment,
-		control.InstallationID,
-		control.AccountIncarnationID,
 		control.IssuedAt,
 		control.ExpiresAt,
 		control.SigningKeyID,
 		control.Algorithm,
-		control.Signature,
 	} {
 		if !validASCIIField(value, 1, maxCapabilityFieldBytes) {
 			return false

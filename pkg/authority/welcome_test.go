@@ -24,17 +24,17 @@ func signedWelcomeAuthorization(
 	topicDigest := sha256.Sum256([]byte("topic"))
 	envelopeDigest := sha256.Sum256([]byte("envelope"))
 	conversationCommitment, err := ExpectedConversationCommitment(
-		"development",
-		"installation",
-		"incarnation",
+		"dev",
+		testInstallationID,
+		testAccountIncarnationID,
 		"conversation",
 	)
 	require.NoError(t, err)
 	authorization := WelcomeAuthorizationV1{
 		SchemaVersion:        1,
-		Environment:          "development",
-		InstallationID:       "installation",
-		AccountIncarnationID: "incarnation",
+		Environment:          "dev",
+		InstallationID:       testInstallationID,
+		AccountIncarnationID: testAccountIncarnationID,
 		PolicyEpoch:          9,
 		TopicDigest:          hex.EncodeToString(topicDigest[:]),
 		OuterEnvelopeDigest:  hex.EncodeToString(envelopeDigest[:]),
@@ -154,6 +154,38 @@ func TestWelcomeAuthorizationSignatureCoversOneTimeNonce(t *testing.T) {
 	)
 }
 
+func TestWelcomeAuthorizationRejectsNoncanonicalRawURLBase64(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	valid, keys := signedWelcomeAuthorization(t, now, time.Minute)
+
+	t.Run("signature", func(t *testing.T) {
+		authorization := valid
+		authorization.Signature = noncanonicalRawURLTrailingBits(
+			t,
+			authorization.Signature,
+		)
+		require.ErrorIs(
+			t,
+			VerifyWelcomeAuthorization(
+				authorization,
+				keys,
+				WelcomeVerifyOptions{Now: now},
+			),
+			ErrWelcomeAuthorizationInvalid,
+		)
+	})
+
+	t.Run("nonce", func(t *testing.T) {
+		authorization := valid
+		authorization.Nonce = noncanonicalRawURLTrailingBits(
+			t,
+			authorization.Nonce,
+		)
+		_, err := authorization.SigningBytes()
+		require.ErrorIs(t, err, ErrWelcomeAuthorizationInvalid)
+	})
+}
+
 func TestWelcomeAuthorizationSignatureCoversConversationCommitment(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	authorization, keys := signedWelcomeAuthorization(t, now, time.Minute)
@@ -172,9 +204,9 @@ func TestWelcomeAuthorizationSignatureCoversConversationCommitment(t *testing.T)
 func TestWelcomeAuthorizationSigningBytesWireVector(t *testing.T) {
 	authorization := WelcomeAuthorizationV1{
 		SchemaVersion:                  1,
-		Environment:                    "development",
-		InstallationID:                 "installation",
-		AccountIncarnationID:           "incarnation",
+		Environment:                    "dev",
+		InstallationID:                 testInstallationID,
+		AccountIncarnationID:           testAccountIncarnationID,
 		PolicyEpoch:                    9,
 		TopicDigest:                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		OuterEnvelopeDigest:            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -191,11 +223,11 @@ func TestWelcomeAuthorizationSigningBytesWireVector(t *testing.T) {
 	require.Equal(
 		t,
 		"Hytch safety welcome authorization v1\x00"+
-			`{"account_incarnation_id":"incarnation","algorithm":"Ed25519",`+
-			`"environment":"development",`+
+			`{"account_incarnation_id":"`+testAccountIncarnationID+`","algorithm":"Ed25519",`+
+			`"environment":"dev",`+
 			`"expected_conversation_commitment":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",`+
 			`"expires_at":"2026-07-26T12:01:00Z","grant_version":3,`+
-			`"installation_id":"installation",`+
+			`"installation_id":"`+testInstallationID+`",`+
 			`"issued_at":"2026-07-26T12:00:00Z",`+
 			`"nonce":"MDEyMzQ1Njc4OWFiY2RlZg",`+
 			`"outer_envelope_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",`+

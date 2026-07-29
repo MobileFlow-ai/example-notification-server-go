@@ -17,15 +17,15 @@ func TestDerivationVector(t *testing.T) {
 	alias, err := DeriveRouteAlias(
 		routeKey,
 		topic,
-		EnvironmentDevelopment,
+		EnvironmentDev,
 		"2026-07-26",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "d4737d693b0616f11aba24f8043cfa96", hex.EncodeToString(alias[:]))
+	require.Equal(t, "316ec86c0ceea9a9f387d1fb972fbf33", hex.EncodeToString(alias[:]))
 
 	dayKey, err := DeriveDayKey(
 		routeKey,
-		EnvironmentDevelopment,
+		EnvironmentDev,
 		"2026-07-26",
 		alias,
 		7,
@@ -33,7 +33,7 @@ func TestDerivationVector(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		"3a683131eec1b51a7ed0a2521b3a50346dc8fa34ad89dbb46773e2310f3ea0af",
+		"e6f6646090e6609cb4e2dbffd2e524ffd56f3c8c8f4b451290c5b1f08e61b15a",
 		hex.EncodeToString(dayKey[:]),
 	)
 }
@@ -47,7 +47,7 @@ func TestSealVectorOpenAndReplay(t *testing.T) {
 	envelope, err := Seal(SealRequest{
 		RouteKey:         routeKey,
 		Topic:            []byte("topic-vector-01"),
-		Environment:      EnvironmentDevelopment,
+		Environment:      EnvironmentDev,
 		AliasDay:         "2026-07-26",
 		RouteKeyEpoch:    7,
 		NoncePrefix:      prefix,
@@ -59,7 +59,7 @@ func TestSealVectorOpenAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		"d6652d5373b3428600ebf242ead12ac9ab8a9886123581210b5002fe41a7215f8baef93eac",
+		"f1eed46f0956477b66bb6dbe4310b951c99a0294f3a724e8ee6410594264788bde26befa50",
 		hex.EncodeToString(envelope.Ciphertext),
 	)
 
@@ -67,7 +67,7 @@ func TestSealVectorOpenAndReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		`{"alias_day":"2026-07-26","delivery_sequence":9,"environment":"development","nonce_prefix":"aabbccdd","route_alias":"d4737d693b0616f11aba24f8043cfa96","route_key_epoch":7,"schema_version":1}`,
+		`{"alias_day":"2026-07-26","delivery_sequence":9,"environment":"dev","nonce_prefix":"aabbccdd","route_alias":"316ec86c0ceea9a9f387d1fb972fbf33","route_key_epoch":7,"schema_version":1}`,
 		string(aad),
 	)
 	parsed, err := ParseCanonicalAAD(aad)
@@ -78,7 +78,7 @@ func TestSealVectorOpenAndReplay(t *testing.T) {
 	opened, err := Open(OpenRequest{
 		RouteKey:              routeKey,
 		Topic:                 []byte("topic-vector-01"),
-		ExpectedEnvironment:   EnvironmentDevelopment,
+		ExpectedEnvironment:   EnvironmentDev,
 		ExpectedAliasDay:      "2026-07-26",
 		ExpectedRouteKeyEpoch: 7,
 		Envelope:              envelope,
@@ -92,7 +92,7 @@ func TestSealVectorOpenAndReplay(t *testing.T) {
 	_, err = Open(OpenRequest{
 		RouteKey:              routeKey,
 		Topic:                 []byte("topic-vector-01"),
-		ExpectedEnvironment:   EnvironmentDevelopment,
+		ExpectedEnvironment:   EnvironmentDev,
 		ExpectedAliasDay:      "2026-07-26",
 		ExpectedRouteKeyEpoch: 7,
 		Envelope:              envelope,
@@ -106,7 +106,7 @@ func TestSealFallsBackToCompactForegroundSyncBeforeEncryption(t *testing.T) {
 	envelope, err := Seal(SealRequest{
 		RouteKey:         make([]byte, RouteKeySize),
 		Topic:            []byte("welcome-topic"),
-		Environment:      EnvironmentDevelopment,
+		Environment:      EnvironmentDev,
 		AliasDay:         "2026-07-26",
 		RouteKeyEpoch:    1,
 		NoncePrefix:      [NoncePrefixSize]byte{1, 2, 3, 4},
@@ -125,7 +125,7 @@ func TestSealFallsBackToCompactForegroundSyncBeforeEncryption(t *testing.T) {
 	opened, err := Open(OpenRequest{
 		RouteKey:              make([]byte, RouteKeySize),
 		Topic:                 []byte("welcome-topic"),
-		ExpectedEnvironment:   EnvironmentDevelopment,
+		ExpectedEnvironment:   EnvironmentDev,
 		ExpectedAliasDay:      "2026-07-26",
 		ExpectedRouteKeyEpoch: 1,
 		Envelope:              envelope,
@@ -141,7 +141,7 @@ func TestOpenFailsClosedOnRouteAEADSequenceReplayAndKeyState(t *testing.T) {
 	request := SealRequest{
 		RouteKey:         routeKey,
 		Topic:            []byte("topic"),
-		Environment:      EnvironmentDevelopment,
+		Environment:      EnvironmentDev,
 		AliasDay:         "2026-07-26",
 		RouteKeyEpoch:    2,
 		NoncePrefix:      [NoncePrefixSize]byte{4, 3, 2, 1},
@@ -157,7 +157,7 @@ func TestOpenFailsClosedOnRouteAEADSequenceReplayAndKeyState(t *testing.T) {
 		_, openErr := Open(OpenRequest{
 			RouteKey:              routeKey,
 			Topic:                 topic,
-			ExpectedEnvironment:   EnvironmentDevelopment,
+			ExpectedEnvironment:   EnvironmentDev,
 			ExpectedAliasDay:      "2026-07-26",
 			ExpectedRouteKeyEpoch: epoch,
 			Envelope:              envelope,
@@ -180,7 +180,7 @@ func TestOpenFailsClosedOnRouteAEADSequenceReplayAndKeyState(t *testing.T) {
 
 func TestParseCanonicalAADRejectsAlternateEncoding(t *testing.T) {
 	_, err := ParseCanonicalAAD([]byte(
-		`{ "alias_day":"2026-07-26","delivery_sequence":1,"environment":"development","nonce_prefix":"00000000","route_alias":"00000000000000000000000000000000","route_key_epoch":1,"schema_version":1}`,
+		`{ "alias_day":"2026-07-26","delivery_sequence":1,"environment":"dev","nonce_prefix":"00000000","route_alias":"00000000000000000000000000000000","route_key_epoch":1,"schema_version":1}`,
 	))
 	require.ErrorIs(t, err, ErrInvalidHeader)
 }

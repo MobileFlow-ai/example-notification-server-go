@@ -21,7 +21,7 @@ func TestIncidentAccessGateIntegration(t *testing.T) {
 	gate, err := NewIncidentAccessGate(
 		db,
 		IncidentAccessOptions{
-			Environment:         "development",
+			Environment:         "dev",
 			RoleTTL:             20 * time.Minute,
 			Now:                 func() time.Time { return now },
 			Random:              random,
@@ -196,7 +196,7 @@ func TestIncidentAccessApprovalFailsClosedWhenOversightBroadcastFails(
 	gate, err := NewIncidentAccessGate(
 		db,
 		IncidentAccessOptions{
-			Environment:         "development",
+			Environment:         "dev",
 			Now:                 func() time.Time { return now },
 			Random:              &sequenceReader{},
 			AuthorizedApprovers: []string{"security:actor"},
@@ -266,7 +266,7 @@ func TestIncidentAccessIsEnvironmentScoped(t *testing.T) {
 	development, err := NewIncidentAccessGate(
 		db,
 		IncidentAccessOptions{
-			Environment:         "development",
+			Environment:         "dev",
 			Now:                 func() time.Time { return now },
 			Random:              &sequenceReader{},
 			AuthorizedApprovers: []string{"security:actor"},
@@ -623,7 +623,7 @@ func TestRetentionSweeperIntegrationAndFailClosedHealth(t *testing.T) {
 		db,
 		RetentionOptions{
 			SweepInterval:        15 * time.Minute,
-			Environment:          "development",
+			Environment:          "dev",
 			Lookup:               retentionLookup,
 			EncryptionKeyVersion: 1,
 			Now:                  func() time.Time { return now },

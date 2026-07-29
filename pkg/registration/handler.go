@@ -56,7 +56,9 @@ func NewHandler(refresher Refresher, bearerSecret string) (*Handler, error) {
 		bearerDigest: sha256.Sum256([]byte(bearerSecret)),
 	}
 	handler.policy, _ = refresher.(PolicyAdvancer)
-	handler.welcome, _ = refresher.(WelcomeAuthorizer)
+	// Welcome routing is intentionally not attached in this build. Retaining
+	// the fixed endpoint response avoids turning an old caller into an
+	// accidental authorization path.
 	return handler, nil
 }
 
@@ -184,6 +186,12 @@ func (h *Handler) ServePolicyHTTP(writer http.ResponseWriter, request *http.Requ
 		writeFixedError(writer, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	if !authority.ValidEnvironment(control.Environment) ||
+		!authority.ValidInstallationID(control.InstallationID) ||
+		!authority.ValidAccountIncarnationID(control.AccountIncarnationID) {
+		writeFixedError(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
 	err = h.policy.AdvancePolicy(request.Context(), vault.PolicyAdvanceRequest{
 		Control: control,
 	})
@@ -288,7 +296,11 @@ func (h *Handler) authorized(header string) bool {
 func convertRefresh(
 	incoming refreshRequestJSON,
 ) (vault.RefreshRequest, error) {
-	if incoming.SchemaVersion != 1 {
+	if incoming.SchemaVersion != 1 ||
+		!authority.ValidEnvironment(incoming.Environment) ||
+		!authority.ValidInstallationID(incoming.InstallationID) ||
+		!authority.ValidAccountIncarnationID(incoming.AccountIncarnationID) ||
+		incoming.Subscriptions == nil {
 		return vault.RefreshRequest{}, vault.ErrRefreshInvalid
 	}
 	token, err := decodeRawBase64(incoming.APNSTokenB64)
@@ -341,8 +353,8 @@ func decodeRawBase64(value string) ([]byte, error) {
 	if value == "" || strings.Contains(value, "=") {
 		return nil, vault.ErrRefreshInvalid
 	}
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil {
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
 		return nil, vault.ErrRefreshInvalid
 	}
 	return decoded, nil

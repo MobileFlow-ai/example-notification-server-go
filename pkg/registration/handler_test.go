@@ -14,7 +14,11 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/vault"
 )
 
-const testBearer = "0123456789abcdef0123456789abcdef"
+const (
+	testBearer       = "0123456789abcdef0123456789abcdef"
+	testInstallation = "3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testIncarnation  = "423e4567-e89b-42d3-a456-426614174000"
+)
 
 type fakeRefresher struct {
 	calls          int
@@ -64,9 +68,9 @@ func validRequestBody(t *testing.T) string {
 	t.Helper()
 	body := map[string]any{
 		"schema_version":         1,
-		"environment":            "development",
-		"installation_id":        "installation",
-		"account_incarnation_id": "incarnation",
+		"environment":            "dev",
+		"installation_id":        testInstallation,
+		"account_incarnation_id": testIncarnation,
 		"generation":             4,
 		"idempotency_key":        "0123456789abcdef",
 		"apns_token_b64":         encoded(make([]byte, 32)),
@@ -146,6 +150,79 @@ func TestHandlerDecodesAtomicTopicList(t *testing.T) {
 	)
 }
 
+func TestHandlerAcceptsExplicitEmptyAtomicReplacement(t *testing.T) {
+	expiresAt := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	fake := &fakeRefresher{result: &vault.RefreshResult{
+		AcceptedGeneration: 4,
+		ActiveLeaseCount:   0,
+		LeaseExpiresAt:     expiresAt,
+	}}
+	handler, err := NewHandler(fake, testBearer)
+	require.NoError(t, err)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal([]byte(validRequestBody(t)), &body))
+	body["subscriptions"] = []any{}
+	encodedBody, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	request := httptest.NewRequest(
+		http.MethodPut,
+		RefreshPath,
+		strings.NewReader(string(encodedBody)),
+	)
+	request.Header.Set("Authorization", "Bearer "+testBearer)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, 1, fake.calls)
+	require.NotNil(t, fake.request.Subscriptions)
+	require.Empty(t, fake.request.Subscriptions)
+	require.JSONEq(
+		t,
+		`{"schema_version":1,"accepted_generation":4,"active_lease_count":0,"lease_expires_at":"2026-08-02T12:00:00Z"}`,
+		response.Body.String(),
+	)
+}
+
+func TestHandlerRejectsMissingOrNullAtomicReplacement(t *testing.T) {
+	for _, mode := range []string{"missing", "null"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &fakeRefresher{}
+			handler, err := NewHandler(fake, testBearer)
+			require.NoError(t, err)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal([]byte(validRequestBody(t)), &body))
+			if mode == "missing" {
+				delete(body, "subscriptions")
+			} else {
+				body["subscriptions"] = nil
+			}
+			encodedBody, err := json.Marshal(body)
+			require.NoError(t, err)
+
+			request := httptest.NewRequest(
+				http.MethodPut,
+				RefreshPath,
+				strings.NewReader(string(encodedBody)),
+			)
+			request.Header.Set("Authorization", "Bearer "+testBearer)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			require.Equal(t, http.StatusBadRequest, response.Code)
+			require.Zero(t, fake.calls)
+			require.JSONEq(
+				t,
+				`{"error":"invalid_request"}`,
+				response.Body.String(),
+			)
+		})
+	}
+}
+
 func TestHandlerRejectsUnknownFieldAndConflictIsContentFree(t *testing.T) {
 	fake := &fakeRefresher{err: vault.ErrRefreshConflict}
 	handler, err := NewHandler(fake, testBearer)
@@ -168,15 +245,57 @@ func TestHandlerRejectsUnknownFieldAndConflictIsContentFree(t *testing.T) {
 	require.JSONEq(t, `{"error":"stale_generation"}`, response.Body.String())
 }
 
+func TestHandlerRejectsNonGate6CapabilityField(t *testing.T) {
+	fake := &fakeRefresher{}
+	handler, err := NewHandler(fake, testBearer)
+	require.NoError(t, err)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal([]byte(validRequestBody(t)), &body))
+	subscriptions := body["subscriptions"].([]any)
+	first := subscriptions[0].(map[string]any)
+	capability := first["receive_capability"].(map[string]any)
+	capability["expected_conversation_commitment"] = strings.Repeat("a", 64)
+	encodedBody, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	request := httptest.NewRequest(
+		http.MethodPut,
+		RefreshPath,
+		strings.NewReader(string(encodedBody)),
+	)
+	request.Header.Set("Authorization", "Bearer "+testBearer)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Zero(t, fake.calls)
+	require.JSONEq(t, `{"error":"invalid_request"}`, response.Body.String())
+}
+
+func TestDecodeRawBase64RejectsNoncanonicalTrailingBits(t *testing.T) {
+	canonical := encoded(make([]byte, 32))
+	malleated := canonical[:len(canonical)-1] + "B"
+
+	canonicalBytes, err := base64.RawURLEncoding.DecodeString(canonical)
+	require.NoError(t, err)
+	malleatedBytes, err := base64.RawURLEncoding.DecodeString(malleated)
+	require.NoError(t, err)
+	require.Equal(t, canonicalBytes, malleatedBytes)
+
+	_, err = decodeRawBase64(malleated)
+	require.ErrorIs(t, err, vault.ErrRefreshInvalid)
+}
+
 func TestPolicyHandlerAcceptsSignedShapeWithoutEchoingIdentity(t *testing.T) {
 	fake := &fakeRefresher{}
 	handler, err := NewHandler(fake, testBearer)
 	require.NoError(t, err)
 	body := `{
 		"schema_version":1,
-		"environment":"development",
-		"installation_id":"sensitive-installation",
-		"account_incarnation_id":"sensitive-incarnation",
+		"environment":"dev",
+		"installation_id":"3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"account_incarnation_id":"423e4567-e89b-42d3-a456-426614174000",
 		"policy_epoch":9,
 		"state":"revoked",
 		"age_policy":"teen",
@@ -195,7 +314,7 @@ func TestPolicyHandlerAcceptsSignedShapeWithoutEchoingIdentity(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Equal(t, 1, fake.policyCalls)
 	require.Equal(t, uint64(9), fake.policyRequest.Control.PolicyEpoch)
-	require.NotContains(t, response.Body.String(), "sensitive")
+	require.NotContains(t, response.Body.String(), testInstallation)
 	require.JSONEq(
 		t,
 		`{"schema_version":1,"accepted_policy_epoch":9}`,
@@ -203,54 +322,28 @@ func TestPolicyHandlerAcceptsSignedShapeWithoutEchoingIdentity(t *testing.T) {
 	)
 }
 
-func TestWelcomeHandlerAcceptsExactAuthorizationWithoutEchoingIdentity(t *testing.T) {
+func TestWelcomeHandlerIsHardClosedForAuthorizedCallers(t *testing.T) {
 	fake := &fakeRefresher{}
 	handler, err := NewHandler(fake, testBearer)
 	require.NoError(t, err)
-	body := `{
-		"schema_version":1,
-		"topic_b64":"AAE",
-		"authorization":{
-			"schema_version":1,
-			"environment":"development",
-			"installation_id":"sensitive-installation",
-			"account_incarnation_id":"sensitive-incarnation",
-			"policy_epoch":9,
-			"topic_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"outer_envelope_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"grant_version":3,
-			"nonce":"MDEyMzQ1Njc4OWFiY2RlZg",
-			"issued_at":"2026-07-26T12:00:00Z",
-			"expires_at":"2026-07-26T12:01:00Z",
-			"signing_key_id":"key-1",
-			"algorithm":"Ed25519",
-			"signature":"signed"
-		}
-	}`
-	request := httptest.NewRequest(http.MethodPost, WelcomePath, strings.NewReader(body))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		WelcomePath,
+		strings.NewReader(`{"installation_id":"must-not-be-read"}`),
+	)
 	request.Header.Set("Authorization", "Bearer "+testBearer)
 	response := httptest.NewRecorder()
 
 	handler.ServeWelcomeHTTP(response, request)
 
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, 1, fake.welcomeCalls)
+	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	require.Zero(t, fake.welcomeCalls)
 	require.Equal(t, "no-store", response.Header().Get("Cache-Control"))
-	require.Equal(t, []byte{0, 1}, fake.welcomeRequest.Topic)
-	require.Equal(
-		t,
-		"sensitive-installation",
-		fake.welcomeRequest.Authorization.InstallationID,
-	)
-	require.NotContains(t, response.Body.String(), "sensitive")
-	require.JSONEq(
-		t,
-		`{"schema_version":1,"accepted":true}`,
-		response.Body.String(),
-	)
+	require.NotContains(t, response.Body.String(), "must-not-be-read")
+	require.JSONEq(t, `{"error":"vault_unavailable"}`, response.Body.String())
 }
 
-func TestWelcomeHandlerFailsClosedBeforeReadingBodyAndOnConflict(t *testing.T) {
+func TestWelcomeHandlerRequiresBearerBeforeHardClosedResponse(t *testing.T) {
 	fake := &fakeRefresher{}
 	handler, err := NewHandler(fake, testBearer)
 	require.NoError(t, err)
@@ -265,16 +358,4 @@ func TestWelcomeHandlerFailsClosedBeforeReadingBodyAndOnConflict(t *testing.T) {
 	require.Zero(t, fake.welcomeCalls)
 	require.NotContains(t, response.Body.String(), "secret")
 
-	fake.welcomeErr = vault.ErrWelcomeConflict
-	body := `{
-		"schema_version":1,
-		"topic_b64":"AAE",
-		"authorization":{"schema_version":1}
-	}`
-	request = httptest.NewRequest(http.MethodPost, WelcomePath, strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+testBearer)
-	response = httptest.NewRecorder()
-	handler.ServeWelcomeHTTP(response, request)
-	require.Equal(t, http.StatusConflict, response.Code)
-	require.JSONEq(t, `{"error":"authorization_conflict"}`, response.Body.String())
 }

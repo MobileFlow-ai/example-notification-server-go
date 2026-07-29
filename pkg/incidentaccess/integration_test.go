@@ -25,7 +25,7 @@ func TestPrivateHTTPPathEnforcesTwoCredentialsAndRevocation(
 	gate, err := vault.NewIncidentAccessGate(
 		db,
 		vault.IncidentAccessOptions{
-			Environment:         "development",
+			Environment:         "dev",
 			RoleTTL:             20 * time.Minute,
 			Now:                 func() time.Time { return now },
 			AuthorizedApprovers: []string{"security:approver"},

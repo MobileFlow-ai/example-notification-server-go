@@ -45,8 +45,8 @@ const (
 type Environment string
 
 const (
-	EnvironmentDevelopment Environment = "development"
-	EnvironmentProduction  Environment = "production"
+	EnvironmentDev        Environment = "dev"
+	EnvironmentProduction Environment = "production"
 )
 
 // RouteAlias is the daily 128-bit HMAC-derived routing alias.
@@ -267,7 +267,7 @@ func validateRouteInputs(
 
 func validateEnvironment(environment Environment) error {
 	switch environment {
-	case EnvironmentDevelopment, EnvironmentProduction:
+	case EnvironmentDev, EnvironmentProduction:
 		return nil
 	default:
 		return ErrInvalidEnvironment

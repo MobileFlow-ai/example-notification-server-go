@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	deliveryVaultEnvironment = "development"
+	deliveryVaultEnvironment = "dev"
 	deliveryVaultKeyID       = "delivery-vault-test-key"
 )
 
@@ -102,8 +102,8 @@ func newDeliveryVaultFixture(
 		store:          store,
 		now:            &now,
 		privateKey:     privateKey,
-		installationID: "delivery-installation",
-		incarnationID:  "delivery-incarnation",
+		installationID: "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		incarnationID:  "323e4567-e89b-42d3-a456-426614174000",
 		age:            age,
 	}
 }
@@ -150,37 +150,25 @@ func (fixture *deliveryVaultFixture) signedSubscription(
 	alias, err := gate8wrapper.DeriveRouteAlias(
 		routeKey,
 		rawTopic,
-		gate8wrapper.EnvironmentDevelopment,
+		gate8wrapper.EnvironmentDev,
 		aliasDay,
 	)
 	require.NoError(t, err)
 	topicDigest := sha256.Sum256(rawTopic)
-	expectedConversationCommitment := ""
-	if target.Kind() == topicpkg.TopicKindWelcomeMessagesV1 {
-		commitment, commitmentErr := authority.ExpectedConversationCommitment(
-			deliveryVaultEnvironment,
-			fixture.installationID,
-			fixture.incarnationID,
-			"delivery-conversation",
-		)
-		require.NoError(t, commitmentErr)
-		expectedConversationCommitment = hex.EncodeToString(commitment[:])
-	}
 	capability := authority.ReceiveCapabilityV1{
-		SchemaVersion:                  1,
-		Environment:                    deliveryVaultEnvironment,
-		InstallationID:                 fixture.installationID,
-		AccountIncarnationID:           fixture.incarnationID,
-		PolicyEpoch:                    1,
-		TopicDigest:                    hex.EncodeToString(topicDigest[:]),
-		AliasDay:                       aliasDay,
-		RouteAlias:                     base64.RawURLEncoding.EncodeToString(alias[:]),
-		ConversationGrantVersion:       1,
-		RosterVersion:                  1,
-		ExpectedConversationCommitment: expectedConversationCommitment,
-		PushMode:                       mode,
-		IssuedAt:                       fixture.now.Format(time.RFC3339Nano),
-		ExpiresAt:                      fixture.now.Add(ttl).Format(time.RFC3339Nano),
+		SchemaVersion:            1,
+		Environment:              deliveryVaultEnvironment,
+		InstallationID:           fixture.installationID,
+		AccountIncarnationID:     fixture.incarnationID,
+		PolicyEpoch:              1,
+		TopicDigest:              hex.EncodeToString(topicDigest[:]),
+		AliasDay:                 aliasDay,
+		RouteAlias:               base64.RawURLEncoding.EncodeToString(alias[:]),
+		ConversationGrantVersion: 1,
+		RosterVersion:            1,
+		PushMode:                 mode,
+		IssuedAt:                 fixture.now.Format(time.RFC3339Nano),
+		ExpiresAt:                fixture.now.Add(ttl).Format(time.RFC3339Nano),
 		Nonce: base64.RawURLEncoding.EncodeToString(
 			bytes.Repeat([]byte{routeByte + 1}, 16),
 		),
@@ -281,10 +269,6 @@ func TestSecureVaultHMACListRolloverClosesStalePeriodAndSuppressesSelf(
 		topicpkg.TopicKindGroupMessagesV1,
 		0x51,
 	)
-	welcome := deliveryVaultTopic(
-		topicpkg.TopicKindWelcomeMessagesV1,
-		0x52,
-	)
 	control := fixture.signedControl(t, 45*time.Second)
 	oldKey := bytes.Repeat([]byte{0x61}, sha256.Size)
 	newKey := bytes.Repeat([]byte{0x62}, sha256.Size)
@@ -297,22 +281,12 @@ func TestSecureVaultHMACListRolloverClosesStalePeriodAndSuppressesSelf(
 		authority.PushModeAlertAllowed,
 		45*time.Second,
 	)
-	welcomeSubscription := fixture.signedSubscription(
-		t,
-		welcome,
-		0x72,
-		period,
-		nil,
-		authority.PushModeSuppressed,
-		45*time.Second,
-	)
 	_, err := fixture.store.Refresh(
 		t.Context(),
 		fixture.refreshRequest(
 			1,
 			control,
 			conversationSubscription,
-			welcomeSubscription,
 		),
 	)
 	require.NoError(t, err)
@@ -335,7 +309,6 @@ func TestSecureVaultHMACListRolloverClosesStalePeriodAndSuppressesSelf(
 			2,
 			control,
 			rotatedConversation,
-			welcomeSubscription,
 		),
 	)
 	require.NoError(t, err)
@@ -373,7 +346,7 @@ func TestSecureVaultHMACListRolloverClosesStalePeriodAndSuppressesSelf(
 	service, err := NewApnsDeliveryWithClient(
 		zap.NewNop(),
 		options.ApnsOptions{
-			Mode:  deliveryVaultEnvironment,
+			Mode:  "development",
 			Topic: "com.example.hytch.dev",
 		},
 		client,
@@ -418,10 +391,6 @@ func TestQueuedAuthorityExactExpiryMakesZeroAPNSCalls(t *testing.T) {
 				topicpkg.TopicKindGroupMessagesV1,
 				0x53,
 			)
-			welcome := deliveryVaultTopic(
-				topicpkg.TopicKindWelcomeMessagesV1,
-				0x54,
-			)
 			control := fixture.signedControl(t, test.ttl)
 			routeHMACKey := bytes.Repeat([]byte{0x63}, sha256.Size)
 			_, err := fixture.store.Refresh(
@@ -436,15 +405,6 @@ func TestQueuedAuthorityExactExpiryMakesZeroAPNSCalls(t *testing.T) {
 						period,
 						routeHMACKey,
 						authority.PushModeAlertAllowed,
-						test.ttl,
-					),
-					fixture.signedSubscription(
-						t,
-						welcome,
-						0x74,
-						period,
-						nil,
-						authority.PushModeSuppressed,
 						test.ttl,
 					),
 				),

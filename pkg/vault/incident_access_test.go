@@ -37,7 +37,7 @@ func TestNewIncidentAccessGateRejectsInvalidConfiguration(t *testing.T) {
 	gate, err = NewIncidentAccessGate(
 		db,
 		IncidentAccessOptions{
-			Environment:         "development",
+			Environment:         "dev",
 			RoleTTL:             maxIncidentRoleTTL + time.Nanosecond,
 			AuthorizedApprovers: []string{"security:actor"},
 			Broadcast:           validBroadcast,

@@ -40,7 +40,7 @@ func newSignedStoreFixture(t *testing.T) (*signedStoreFixture, *sql.DB) {
 	require.NoError(t, err)
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	store, err := NewStore(db, StoreOptions{
-		Environment:   "development",
+		Environment:   "dev",
 		LeaseTTL:      7 * 24 * time.Hour,
 		Encryption:    keyring,
 		Lookup:        lookup,
@@ -50,7 +50,7 @@ func newSignedStoreFixture(t *testing.T) (*signedStoreFixture, *sql.DB) {
 	require.NoError(t, err)
 	sweeper, err := NewRetentionSweeper(db, RetentionOptions{
 		SweepInterval:        15 * time.Minute,
-		Environment:          "development",
+		Environment:          "dev",
 		Lookup:               lookup,
 		EncryptionKeyVersion: keyring.ActiveVersion(),
 		Now:                  func() time.Time { return now },
@@ -63,8 +63,8 @@ func newSignedStoreFixture(t *testing.T) (*signedStoreFixture, *sql.DB) {
 		now:            &now,
 		privateKey:     privateKey,
 		keyID:          "test-key",
-		installationID: "installation-test-01",
-		incarnationID:  "incarnation-test-01",
+		installationID: "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		incarnationID:  "223e4567-e89b-42d3-a456-426614174000",
 	}, db
 }
 
@@ -118,32 +118,20 @@ func (fixture *signedStoreFixture) subscription(
 	)
 	require.NoError(t, err)
 	topicDigest := sha256.Sum256(rawTopic)
-	expectedConversationCommitment := ""
-	if topic.Kind() == topicpkg.TopicKindWelcomeMessagesV1 {
-		commitment, commitmentErr := authority.ExpectedConversationCommitment(
-			fixture.store.environment,
-			fixture.installationID,
-			fixture.incarnationID,
-			"conversation-test-01",
-		)
-		require.NoError(t, commitmentErr)
-		expectedConversationCommitment = hex.EncodeToString(commitment[:])
-	}
 	capability := authority.ReceiveCapabilityV1{
-		SchemaVersion:                  1,
-		Environment:                    fixture.store.environment,
-		InstallationID:                 fixture.installationID,
-		AccountIncarnationID:           fixture.incarnationID,
-		PolicyEpoch:                    policyEpoch,
-		TopicDigest:                    hex.EncodeToString(topicDigest[:]),
-		AliasDay:                       aliasDay,
-		RouteAlias:                     base64.RawURLEncoding.EncodeToString(alias[:]),
-		ConversationGrantVersion:       1,
-		RosterVersion:                  1,
-		ExpectedConversationCommitment: expectedConversationCommitment,
-		PushMode:                       mode,
-		IssuedAt:                       fixture.now.Add(-time.Second).Format(time.RFC3339Nano),
-		ExpiresAt:                      fixture.now.Add(30 * time.Second).Format(time.RFC3339Nano),
+		SchemaVersion:            1,
+		Environment:              fixture.store.environment,
+		InstallationID:           fixture.installationID,
+		AccountIncarnationID:     fixture.incarnationID,
+		PolicyEpoch:              policyEpoch,
+		TopicDigest:              hex.EncodeToString(topicDigest[:]),
+		AliasDay:                 aliasDay,
+		RouteAlias:               base64.RawURLEncoding.EncodeToString(alias[:]),
+		ConversationGrantVersion: 1,
+		RosterVersion:            1,
+		PushMode:                 mode,
+		IssuedAt:                 fixture.now.Add(-time.Second).Format(time.RFC3339Nano),
+		ExpiresAt:                fixture.now.Add(30 * time.Second).Format(time.RFC3339Nano),
 		Nonce: base64.RawURLEncoding.EncodeToString(
 			bytes.Repeat([]byte{routeByte + 1}, 16),
 		),
@@ -185,8 +173,11 @@ func (fixture *signedStoreFixture) refresh(
 		IdempotencyKey:       "idempotency-test-0001",
 		APNSToken:            bytes.Repeat([]byte{0xa1}, 32),
 		PayloadSchema:        "hytch_push_wrapper_v1",
-		Subscriptions:        subscriptions,
-		PolicyControl:        policy,
+		Subscriptions: append(
+			[]SubscriptionRefresh{},
+			subscriptions...,
+		),
+		PolicyControl: policy,
 	}
 }
 
@@ -201,7 +192,6 @@ func TestSecureStoreAtomicTopicListsEncryptedRoutingAndSequences(t *testing.T) {
 	period := uint32(688)
 	firstDM := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x11)
 	stitchedDM := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x12)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x13)
 	control := fixture.policy(
 		t,
 		1,
@@ -231,15 +221,6 @@ func TestSecureStoreAtomicTopicListsEncryptedRoutingAndSequences(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x23,
-			1,
-			period,
-			authority.PushModeSuppressed,
-			1,
-		),
 	)
 	nonIJSON := request
 	nonIJSON.Generation = gate8wrapper.MaxCanonicalInteger + 1
@@ -248,7 +229,7 @@ func TestSecureStoreAtomicTopicListsEncryptedRoutingAndSequences(t *testing.T) {
 
 	result, err := fixture.store.Refresh(t.Context(), request)
 	require.NoError(t, err)
-	require.Equal(t, 3, result.ActiveLeaseCount)
+	require.Equal(t, 2, result.ActiveLeaseCount)
 	require.Equal(t, fixture.now.Add(7*24*time.Hour), result.LeaseExpiresAt)
 
 	// A semantic replay is idempotent regardless of request object identity.
@@ -340,11 +321,28 @@ func TestSecureStoreAtomicTopicListsEncryptedRoutingAndSequences(t *testing.T) {
 		aggregateComponentBridge,
 	).Scan(&aggregateCells))
 	require.Equal(t, 1, aggregateCells)
+
+	var welcomeLeases int
+	var welcomeAuthorizations int
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*)
+		   FROM hytch_push_vault.subscription_leases
+		  WHERE topic_kind = $1`,
+		topicWelcome,
+	).Scan(&welcomeLeases))
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*)
+		   FROM hytch_push_vault.welcome_authorizations`,
+	).Scan(&welcomeAuthorizations))
+	require.Zero(t, welcomeLeases)
+	require.Zero(t, welcomeAuthorizations)
 }
 
-func TestWelcomeRouteRequiresExactSuppressedPushMode(t *testing.T) {
+func TestRefreshRejectsWelcomeTopicBeforePersistence(t *testing.T) {
 	requireVaultIntegrationTests(t)
-	fixture, _ := newSignedStoreFixture(t)
+	fixture, db := newSignedStoreFixture(t)
 	period := uint32(688)
 	conversation := testTopic(
 		t,
@@ -385,12 +383,31 @@ func TestWelcomeRouteRequiresExactSuppressedPushMode(t *testing.T) {
 				0x25,
 				1,
 				period,
-				authority.PushMode("future-mode"),
+				authority.PushModeSuppressed,
 				1,
 			),
 		),
 	)
 	require.ErrorIs(t, err, ErrRefreshInvalid)
+
+	var installationStates int
+	var leases int
+	var welcomeAuthorizations int
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*) FROM hytch_push_vault.installation_states`,
+	).Scan(&installationStates))
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*) FROM hytch_push_vault.subscription_leases`,
+	).Scan(&leases))
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*) FROM hytch_push_vault.welcome_authorizations`,
+	).Scan(&welcomeAuthorizations))
+	require.Zero(t, installationStates)
+	require.Zero(t, leases)
+	require.Zero(t, welcomeAuthorizations)
 }
 
 func TestSharedVaultDatabaseIsolatesDevelopmentAndProduction(t *testing.T) {
@@ -435,11 +452,6 @@ func TestSharedVaultDatabaseIsolatesDevelopmentAndProduction(t *testing.T) {
 		topicpkg.TopicKindGroupMessagesV1,
 		0x24,
 	)
-	welcome := testTopic(
-		t,
-		topicpkg.TopicKindWelcomeMessagesV1,
-		0x25,
-	)
 	refreshFor := func(fixture *signedStoreFixture, tokenByte byte) RefreshRequest {
 		control := fixture.policy(
 			t,
@@ -459,15 +471,6 @@ func TestSharedVaultDatabaseIsolatesDevelopmentAndProduction(t *testing.T) {
 				1,
 				period,
 				authority.PushModeAlertAllowed,
-				1,
-			),
-			fixture.subscription(
-				t,
-				welcome,
-				0x27,
-				1,
-				period,
-				authority.PushModeSuppressed,
 				1,
 			),
 		)
@@ -533,7 +536,7 @@ func TestSharedVaultDatabaseIsolatesDevelopmentAndProduction(t *testing.T) {
 		`SELECT COUNT(*), COUNT(DISTINCT route_key_commitment)
 		   FROM hytch_push_vault.route_key_history`,
 	).Scan(&routeHistoryRows, &routeKeyCommitments))
-	require.Equal(t, 4, routeHistoryRows)
+	require.Equal(t, 2, routeHistoryRows)
 	require.Equal(t, routeHistoryRows, routeKeyCommitments)
 
 	developmentRoutes, err := development.store.GetSubscriptions(
@@ -645,11 +648,6 @@ func TestAdvancePolicyFailsClosedOnStoredEnvironmentOrIdentityMismatch(
 				topicpkg.TopicKindGroupMessagesV1,
 				0x28,
 			)
-			welcome := testTopic(
-				t,
-				topicpkg.TopicKindWelcomeMessagesV1,
-				0x29,
-			)
 			control := fixture.policy(
 				t,
 				1,
@@ -670,15 +668,6 @@ func TestAdvancePolicyFailsClosedOnStoredEnvironmentOrIdentityMismatch(
 						1,
 						688,
 						authority.PushModeAlertAllowed,
-						1,
-					),
-					fixture.subscription(
-						t,
-						welcome,
-						0x2b,
-						1,
-						688,
-						authority.PushModeSuppressed,
 						1,
 					),
 				),
@@ -791,11 +780,6 @@ func TestTeenConversationKillSwitchStopsPersistedRoutesAndClaims(t *testing.T) {
 		topicpkg.TopicKindGroupMessagesV1,
 		0x2c,
 	)
-	welcome := testTopic(
-		t,
-		topicpkg.TopicKindWelcomeMessagesV1,
-		0x2d,
-	)
 	control := fixture.policy(
 		t,
 		1,
@@ -822,15 +806,6 @@ func TestTeenConversationKillSwitchStopsPersistedRoutesAndClaims(t *testing.T) {
 			1,
 			period,
 			authority.PushModeAlertAllowed,
-			1,
-		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x2f,
-			1,
-			period,
-			authority.PushModeSuppressed,
 			1,
 		),
 	)
@@ -914,7 +889,6 @@ func TestPreRegistrationRevokeFencesLowerPolicyEpoch(t *testing.T) {
 	requireVaultIntegrationTests(t)
 	fixture, db := newSignedStoreFixture(t)
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x2a)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x2b)
 
 	revoke := fixture.policy(
 		t,
@@ -958,15 +932,6 @@ func TestPreRegistrationRevokeFencesLowerPolicyEpoch(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x2d,
-			1,
-			688,
-			authority.PushModeSuppressed,
-			1,
-		),
 	)
 	_, err := fixture.store.Refresh(t.Context(), staleRefresh)
 	require.ErrorIs(t, err, ErrRefreshConflict)
@@ -991,19 +956,10 @@ func TestPreRegistrationRevokeFencesLowerPolicyEpoch(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			3,
 		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x2f,
-			1,
-			688,
-			authority.PushModeSuppressed,
-			3,
-		),
 	)
 	result, err := fixture.store.Refresh(t.Context(), freshRefresh)
 	require.NoError(t, err)
-	require.Equal(t, 2, result.ActiveLeaseCount)
+	require.Equal(t, 1, result.ActiveLeaseCount)
 }
 
 func TestActivePolicyAdvanceRequiresAndAcceptsMatchingFullRefresh(t *testing.T) {
@@ -1011,7 +967,6 @@ func TestActivePolicyAdvanceRequiresAndAcceptsMatchingFullRefresh(t *testing.T) 
 	fixture, db := newSignedStoreFixture(t)
 	period := uint32(688)
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x35)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x36)
 
 	initialControl := fixture.policy(
 		t,
@@ -1031,15 +986,6 @@ func TestActivePolicyAdvanceRequiresAndAcceptsMatchingFullRefresh(t *testing.T) 
 			1,
 			period,
 			authority.PushModeAlertAllowed,
-			1,
-		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x38,
-			1,
-			period,
-			authority.PushModeSuppressed,
 			1,
 		),
 	)
@@ -1077,20 +1023,11 @@ func TestActivePolicyAdvanceRequiresAndAcceptsMatchingFullRefresh(t *testing.T) 
 			authority.PushModeAlertAllowed,
 			2,
 		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x38,
-			1,
-			period,
-			authority.PushModeSuppressed,
-			2,
-		),
 	)
 	refresh.IdempotencyKey = "idempotency-test-0002"
 	result, err := fixture.store.Refresh(t.Context(), refresh)
 	require.NoError(t, err)
-	require.Equal(t, 2, result.ActiveLeaseCount)
+	require.Equal(t, 1, result.ActiveLeaseCount)
 	require.NoError(t, db.QueryRowContext(
 		t.Context(),
 		`SELECT state FROM hytch_push_vault.installation_states`,
@@ -1103,7 +1040,6 @@ func TestRefreshClampsAcceptedFutureSkewAuthorityExpiry(t *testing.T) {
 	fixture, db := newSignedStoreFixture(t)
 	period := uint32(688)
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x39)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x3a)
 	control := fixture.policy(
 		t,
 		1,
@@ -1132,15 +1068,6 @@ func TestRefreshClampsAcceptedFutureSkewAuthorityExpiry(t *testing.T) {
 			1,
 			period,
 			authority.PushModeAlertAllowed,
-			1,
-		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x4a,
-			1,
-			period,
-			authority.PushModeSuppressed,
 			1,
 		),
 	}
@@ -1207,15 +1134,6 @@ func TestLookupRootReplacementFailsClosed(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		fixture.subscription(
-			t,
-			testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x5b),
-			0x6b,
-			1,
-			period,
-			authority.PushModeSuppressed,
-			1,
-		),
 	)
 	_, err := fixture.store.Refresh(t.Context(), request)
 	require.NoError(t, err)
@@ -1241,7 +1159,6 @@ func TestSecureStoreRejectsStaleHMACAliasIncarnationAndRevokeReplay(t *testing.T
 	fixture, _ := newSignedStoreFixture(t)
 	period := uint32(688)
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x31)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x32)
 	active := fixture.policy(
 		t,
 		1,
@@ -1258,21 +1175,11 @@ func TestSecureStoreRejectsStaleHMACAliasIncarnationAndRevokeReplay(t *testing.T
 		authority.PushModeAlertAllowed,
 		1,
 	)
-	welcomeSubscription := fixture.subscription(
-		t,
-		welcome,
-		0x42,
-		1,
-		period,
-		authority.PushModeSuppressed,
-		1,
-	)
 	request := fixture.refresh(
 		t,
 		1,
 		active,
 		conversationSubscription,
-		welcomeSubscription,
 	)
 	_, err := fixture.store.Refresh(t.Context(), request)
 	require.NoError(t, err)
@@ -1309,7 +1216,7 @@ func TestSecureStoreRejectsStaleHMACAliasIncarnationAndRevokeReplay(t *testing.T
 		2,
 		authority.PolicyStateRevoked,
 		authority.AgePolicyAdult,
-		"other-incarnation",
+		"223e4567-e89b-42d3-a456-426614174001",
 	)
 	err = fixture.store.AdvancePolicy(t.Context(), PolicyAdvanceRequest{
 		Control: wrongIncarnationControl,
@@ -1355,15 +1262,6 @@ func TestSecureStoreRejectsStaleHMACAliasIncarnationAndRevokeReplay(t *testing.T
 			authority.PushModeAlertAllowed,
 			2,
 		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x52,
-			2,
-			period,
-			authority.PushModeSuppressed,
-			2,
-		),
 	)
 	fixtureRequest.IdempotencyKey = "idempotency-test-0003"
 	_, err = fixture.store.Refresh(t.Context(), fixtureRequest)
@@ -1375,7 +1273,6 @@ func TestRetentionUnsafeBlocksRegistrationAndRouting(t *testing.T) {
 	fixture, db := newSignedStoreFixture(t)
 	period := uint32(688)
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x61)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x62)
 	control := fixture.policy(
 		t,
 		1,
@@ -1394,15 +1291,6 @@ func TestRetentionUnsafeBlocksRegistrationAndRouting(t *testing.T) {
 			1,
 			period,
 			authority.PushModeAlertAllowed,
-			1,
-		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x72,
-			1,
-			period,
-			authority.PushModeSuppressed,
 			1,
 		),
 	)
@@ -1434,7 +1322,6 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 	fixture, db := newSignedStoreFixture(t)
 	period := uint32(688)
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x63)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x64)
 	control := fixture.policy(
 		t,
 		1,
@@ -1451,21 +1338,11 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 		authority.PushModeAlertAllowed,
 		1,
 	)
-	welcomeLease := fixture.subscription(
-		t,
-		welcome,
-		0x74,
-		1,
-		period,
-		authority.PushModeSuppressed,
-		1,
-	)
 	request := fixture.refresh(
 		t,
 		1,
 		control,
 		conversationLease,
-		welcomeLease,
 	)
 	_, err := fixture.store.Refresh(t.Context(), request)
 	require.NoError(t, err)
@@ -1547,7 +1424,6 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		welcomeLease,
 	)
 	reusedKeyAtNewEpoch.IdempotencyKey = "idempotency-test-reused-route-key"
 	_, err = fixture.store.Refresh(t.Context(), reusedKeyAtNewEpoch)
@@ -1569,7 +1445,6 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		welcomeLease,
 	)
 	rotatedRoute.IdempotencyKey = "idempotency-test-0003"
 	_, err = fixture.store.Refresh(t.Context(), rotatedRoute)
@@ -1608,18 +1483,24 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 	require.ErrorIs(t, err, ErrDeliveryJobInvalid)
 	require.Zero(t, countJobs(), "stale APNS token cannot be re-enqueued")
 
-	removedRoute := fixture.refresh(t, 5, control, welcomeLease)
+	removedRoute := fixture.refresh(t, 5, control)
 	removedRoute.IdempotencyKey = "idempotency-test-remove-route"
 	removedRoute.APNSToken = append([]byte(nil), rotatedToken.APNSToken...)
-	_, err = fixture.store.Refresh(t.Context(), removedRoute)
+	removed, err := fixture.store.Refresh(t.Context(), removedRoute)
 	require.NoError(t, err)
+	require.Zero(t, removed.ActiveLeaseCount)
+	var remainingLeases int
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*) FROM hytch_push_vault.subscription_leases`,
+	).Scan(&remainingLeases))
+	require.Zero(t, remainingLeases)
 
 	reusedRemovedRoute := fixture.refresh(
 		t,
 		6,
 		control,
 		rotatedRoute.Subscriptions[0],
-		welcomeLease,
 	)
 	reusedRemovedRoute.IdempotencyKey = "idempotency-test-readd-same"
 	reusedRemovedRoute.APNSToken = append(
@@ -1642,7 +1523,6 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		welcomeLease,
 	)
 	reusedRemovedKeyAtHigherEpoch.IdempotencyKey =
 		"idempotency-test-readd-old-key"
@@ -1669,7 +1549,6 @@ func TestRefreshCancelsJobsForTokenAndRouteKeyRotation(t *testing.T) {
 			authority.PushModeAlertAllowed,
 			1,
 		),
-		welcomeLease,
 	)
 	rekeyedRemovedRoute.IdempotencyKey = "idempotency-test-readd-new-key"
 	rekeyedRemovedRoute.APNSToken = append(

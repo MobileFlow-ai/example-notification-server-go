@@ -405,7 +405,7 @@ func TestSecureAPNSConfigurationRequiresOneBase64CredentialAndMatchingEnvironmen
 ) {
 	valid := options.ApnsOptions{
 		SecureWrapperRequired: true,
-		SecureEnvironment:     "development",
+		SecureEnvironment:     "dev",
 		Mode:                  "development",
 		P8CertificateBase64:   "encoded-p8",
 		KeyId:                 "key-id",
@@ -413,6 +413,10 @@ func TestSecureAPNSConfigurationRequiresOneBase64CredentialAndMatchingEnvironmen
 		Topic:                 "com.example.hytch.dev",
 	}
 	require.NoError(t, validateSecureAPNSOptions(valid))
+	production := valid
+	production.SecureEnvironment = "production"
+	production.Mode = "production"
+	require.NoError(t, validateSecureAPNSOptions(production))
 
 	testCases := []func(*options.ApnsOptions){
 		func(opts *options.ApnsOptions) { opts.P8CertificateBase64 = "" },
@@ -422,6 +426,7 @@ func TestSecureAPNSConfigurationRequiresOneBase64CredentialAndMatchingEnvironmen
 		func(opts *options.ApnsOptions) { opts.TeamId = "" },
 		func(opts *options.ApnsOptions) { opts.Topic = "" },
 		func(opts *options.ApnsOptions) { opts.SecureEnvironment = "production" },
+		func(opts *options.ApnsOptions) { opts.SecureEnvironment = "development" },
 	}
 	for _, mutate := range testCases {
 		candidate := valid

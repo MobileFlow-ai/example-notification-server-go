@@ -26,9 +26,9 @@ func TestVerifyPolicyControlAdultAndTeenFreshness(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	base := PolicyControlV1{
 		SchemaVersion:        1,
-		Environment:          "development",
-		InstallationID:       "installation",
-		AccountIncarnationID: "incarnation",
+		Environment:          "dev",
+		InstallationID:       testInstallationID,
+		AccountIncarnationID: testAccountIncarnationID,
 		PolicyEpoch:          7,
 		State:                PolicyStateActive,
 		AgePolicy:            AgePolicyAdult,
@@ -40,9 +40,9 @@ func TestVerifyPolicyControlAdultAndTeenFreshness(t *testing.T) {
 	adult, adultKeys := signPolicyControl(t, base)
 	require.NoError(t, VerifyPolicyControl(adult, adultKeys, PolicyVerifyOptions{
 		Now:                          now.Add(time.Second),
-		ExpectedEnvironment:          "development",
-		ExpectedInstallationID:       "installation",
-		ExpectedAccountIncarnationID: "incarnation",
+		ExpectedEnvironment:          "dev",
+		ExpectedInstallationID:       testInstallationID,
+		ExpectedAccountIncarnationID: testAccountIncarnationID,
 	}))
 
 	teenBase := base
@@ -80,9 +80,9 @@ func TestVerifyPolicyControlRejectsCorrectlySignedTTLOverages(
 		t.Run(test.name, func(t *testing.T) {
 			control, keys := signPolicyControl(t, PolicyControlV1{
 				SchemaVersion:        1,
-				Environment:          "development",
-				InstallationID:       "installation",
-				AccountIncarnationID: "incarnation",
+				Environment:          "dev",
+				InstallationID:       testInstallationID,
+				AccountIncarnationID: testAccountIncarnationID,
 				PolicyEpoch:          8,
 				State:                PolicyStateActive,
 				AgePolicy:            test.age,
@@ -108,9 +108,9 @@ func TestVerifyPolicyControlRejectsTamperAndRevokedIsValidDeny(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	base := PolicyControlV1{
 		SchemaVersion:        1,
-		Environment:          "development",
-		InstallationID:       "installation",
-		AccountIncarnationID: "incarnation",
+		Environment:          "dev",
+		InstallationID:       testInstallationID,
+		AccountIncarnationID: testAccountIncarnationID,
 		PolicyEpoch:          8,
 		State:                PolicyStateRevoked,
 		AgePolicy:            AgePolicyTeen,
@@ -130,13 +130,36 @@ func TestVerifyPolicyControlRejectsTamperAndRevokedIsValidDeny(t *testing.T) {
 	)
 }
 
+func TestVerifyPolicyControlRejectsNoncanonicalSignature(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	control, keys := signPolicyControl(t, PolicyControlV1{
+		SchemaVersion:        1,
+		Environment:          "dev",
+		InstallationID:       testInstallationID,
+		AccountIncarnationID: testAccountIncarnationID,
+		PolicyEpoch:          8,
+		State:                PolicyStateActive,
+		AgePolicy:            AgePolicyAdult,
+		IssuedAt:             now.Format(time.RFC3339Nano),
+		ExpiresAt:            now.Add(time.Minute).Format(time.RFC3339Nano),
+		SigningKeyID:         "key-1",
+		Algorithm:            "Ed25519",
+	})
+	control.Signature = noncanonicalRawURLTrailingBits(t, control.Signature)
+	require.ErrorIs(
+		t,
+		VerifyPolicyControl(control, keys, PolicyVerifyOptions{Now: now}),
+		ErrPolicyControlInvalid,
+	)
+}
+
 func TestVerifyPolicyControlRejectsNonIJSONInteger(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	control := PolicyControlV1{
 		SchemaVersion:        1,
-		Environment:          "development",
-		InstallationID:       "installation",
-		AccountIncarnationID: "incarnation",
+		Environment:          "dev",
+		InstallationID:       testInstallationID,
+		AccountIncarnationID: testAccountIncarnationID,
 		PolicyEpoch:          maxIJSONInteger + 1,
 		State:                PolicyStateActive,
 		AgePolicy:            AgePolicyAdult,

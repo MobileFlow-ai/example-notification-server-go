@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -38,6 +39,8 @@ var (
 
 const (
 	retentionStartupTimeout            = 30 * time.Second
+	legacyRetirementPreflightTimeout   = 20 * time.Second
+	legacyRetirementPreflightDBWait    = 10 * time.Second
 	maxSecureLeaseTTLHours             = 168
 	maxXMTPListenerWorkers             = 128
 	maxIncidentRoleTTLMinutes          = 120
@@ -46,15 +49,32 @@ const (
 )
 
 func main() {
-	if !runWithFixedPanicBoundary(runServer) {
+	preflightRequested := legacyRetirementPreflightRequested(os.Args[1:])
+	if !runWithModeAwareFixedPanicBoundary(
+		runServer,
+		preflightRequested,
+		os.Stderr,
+	) {
 		os.Exit(1)
 	}
 }
 
 func runWithFixedPanicBoundary(run func()) (completed bool) {
+	return runWithModeAwareFixedPanicBoundary(run, false, nil)
+}
+
+func runWithModeAwareFixedPanicBoundary(
+	run func(),
+	preflightRequested bool,
+	stderr io.Writer,
+) (completed bool) {
 	defer func() {
 		if recover() != nil {
-			log.Print("fatal runtime failure")
+			if preflightRequested {
+				writeLegacyRetirementPreflightFailure(stderr)
+			} else {
+				log.Print("fatal runtime failure")
+			}
 			completed = false
 		}
 	}()
@@ -64,12 +84,24 @@ func runWithFixedPanicBoundary(run func()) (completed bool) {
 
 func runServer() {
 	log.SetFlags(0)
+	args := os.Args[1:]
+	preflightRequested := legacyRetirementPreflightRequested(args)
+	if preflightRequested &&
+		legacyRetirementPreflightMigrationDSNOnCLI(args) {
+		writeLegacyRetirementPreflightFailure(os.Stderr)
+		os.Exit(1)
+	}
+
 	var err error
 	parser := flags.NewParser(
 		&opts,
 		flags.HelpFlag|flags.PassDoubleDash,
 	)
-	if _, err = parser.Parse(); err != nil {
+	if _, err = parser.ParseArgs(args); err != nil {
+		if preflightRequested {
+			writeLegacyRetirementPreflightFailure(os.Stderr)
+			os.Exit(1)
+		}
 		if err, ok := err.(*flags.Error); !ok || err.Type != flags.ErrHelp {
 			log.Fatal("option parsing failed")
 		}
@@ -77,8 +109,21 @@ func runServer() {
 		return
 	}
 
-	logger = logging.CreateLogger(opts.LogEncoding, opts.LogLevel)
+	if preflightRequested {
+		completed := runLegacyRetirementPreflightMode(
+			context.Background(),
+			opts,
+			os.Stdout,
+			os.Stderr,
+			database.RunLegacyRetirementPreflight,
+		)
+		if !completed {
+			os.Exit(1)
+		}
+		return
+	}
 
+	logger = logging.CreateLogger(opts.LogEncoding, opts.LogLevel)
 	clientVersion := "example-notifications-server-go/" + shortGitCommit()
 	appVersion := "xmtp-go/" + shortXMTPGoClientVersion()
 
@@ -96,6 +141,12 @@ func runServer() {
 			logger.Fatal("database migration connection close failed")
 		}
 		return
+	}
+	if !apnsRuntimeConfigurationValid(opts.Apns.Enabled) {
+		logger.Fatal("APNS egress unavailable in this build")
+	}
+	if !welcomeRuntimeConfigurationValid(opts.Vault.WelcomeEnabled) {
+		logger.Fatal("welcome routing unavailable in this build")
 	}
 	if opts.MigrationDbConnectionString != "" {
 		logger.Fatal("migration credential present in runtime")
@@ -172,7 +223,7 @@ func runServer() {
 			AuthorityKeys: authorityKeys,
 			TeenConversationEnabled: opts.Vault.
 				TeenConversationMode == "enabled",
-			WelcomeEnabled: opts.Vault.WelcomeEnabled,
+			WelcomeEnabled: false,
 		})
 		if storeErr != nil {
 			logger.Fatal("secure vault initialization failed")
@@ -542,6 +593,14 @@ func runServer() {
 	}
 }
 
+func welcomeRuntimeConfigurationValid(enabled bool) bool {
+	return !enabled
+}
+
+func apnsRuntimeConfigurationValid(enabled bool) bool {
+	return !enabled
+}
+
 func checkedSecureLeaseTTL(hours int) (time.Duration, bool) {
 	// Validate the integer before converting to time.Duration so a
 	// maliciously large environment value cannot overflow into an apparently
@@ -715,6 +774,126 @@ func initMigrationDb() *sql.DB {
 		log.Fatal("db migration error")
 	}
 	return db
+}
+
+func legacyRetirementPreflightModeValid(config options.Options) bool {
+	return config.PreflightLegacyRetirement &&
+		config.MigrationDbConnectionString != "" &&
+		config.DbConnectionString == "" &&
+		config.CreateMigration == "" &&
+		!config.MigrateOnly &&
+		!config.Api.Enabled &&
+		!config.Xmtp.ListenerEnabled &&
+		!config.Apns.Enabled &&
+		!config.Fcm.Enabled &&
+		!config.HttpDelivery.Enabled &&
+		!config.Vault.Enabled &&
+		!config.Incident.Enabled &&
+		!legacyRetirementPreflightRuntimeCredentialPresent(config)
+}
+
+type legacyRetirementPreflightRunner func(
+	context.Context,
+	string,
+	time.Duration,
+) (string, bool)
+
+func runLegacyRetirementPreflightMode(
+	ctx context.Context,
+	config options.Options,
+	stdout io.Writer,
+	stderr io.Writer,
+	run legacyRetirementPreflightRunner,
+) bool {
+	if ctx == nil ||
+		!legacyRetirementPreflightModeValid(config) ||
+		stdout == nil ||
+		stderr == nil ||
+		run == nil {
+		writeLegacyRetirementPreflightFailure(stderr)
+		return false
+	}
+
+	preflightCtx, cancel := context.WithTimeout(
+		ctx,
+		legacyRetirementPreflightTimeout,
+	)
+	defer cancel()
+
+	output, passed := run(
+		preflightCtx,
+		config.MigrationDbConnectionString,
+		legacyRetirementPreflightDBWait,
+	)
+	if !passed {
+		writeLegacyRetirementPreflightFailure(stderr)
+		return false
+	}
+	if _, err := io.WriteString(stdout, output); err != nil {
+		writeLegacyRetirementPreflightFailure(stderr)
+		return false
+	}
+	return true
+}
+
+func legacyRetirementPreflightRequested(args []string) bool {
+	return legacyRetirementPreflightLongOptionPresent(
+		args,
+		"--preflight-legacy-retirement",
+	)
+}
+
+func legacyRetirementPreflightMigrationDSNOnCLI(args []string) bool {
+	return legacyRetirementPreflightLongOptionPresent(
+		args,
+		"--migration-db-connection-string",
+	)
+}
+
+func legacyRetirementPreflightLongOptionPresent(
+	args []string,
+	option string,
+) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == option || strings.HasPrefix(arg, option+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func writeLegacyRetirementPreflightFailure(stderr io.Writer) {
+	if stderr != nil {
+		_, _ = io.WriteString(
+			stderr,
+			database.LegacyRetirementPreflightFailureOutput,
+		)
+	}
+}
+
+func legacyRetirementPreflightRuntimeCredentialPresent(
+	config options.Options,
+) bool {
+	return config.Apns.P8Certificate != "" ||
+		config.Apns.P8CertificateBase64 != "" ||
+		config.Apns.P8CertificateFilePath != "" ||
+		config.Apns.KeyId != "" ||
+		config.Apns.TeamId != "" ||
+		config.Apns.Topic != "" ||
+		config.Fcm.CredentialsJson != "" ||
+		config.Fcm.ProjectId != "" ||
+		config.HttpDelivery.Address != "" ||
+		config.HttpDelivery.AuthHeader != "" ||
+		config.Vault.MasterKeysJSON != "" ||
+		config.Vault.LookupKey != "" ||
+		config.Vault.AuthorityPublicKeysJSON != "" ||
+		config.Vault.APIBearerToken != "" ||
+		config.Incident.ActorCredentialsJSON != "" ||
+		config.Incident.OversightWebhookURL != "" ||
+		config.Incident.OversightWebhookBearer != ""
 }
 
 func createMigration() error {

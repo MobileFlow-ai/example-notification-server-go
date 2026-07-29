@@ -9,32 +9,32 @@ import (
 
 func TestExpectedConversationCommitmentWireVector(t *testing.T) {
 	commitment, err := ExpectedConversationCommitment(
-		"development",
-		"installation",
-		"incarnation",
+		"dev",
+		testInstallationID,
+		testAccountIncarnationID,
 		"conversation",
 	)
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		"5c98d79b0069383245a2fe22c161c922c244d3a9557340ff8ce2c88e542287bc",
+		"ea7a8a3f8a487fd4117713e405a7063ef08f3577e33c74ff8e00455eea32dc00",
 		hex.EncodeToString(commitment[:]),
 	)
 }
 
 func TestExpectedConversationCommitmentRejectsNoncanonicalFields(t *testing.T) {
 	_, err := ExpectedConversationCommitment(
-		"development",
-		"installation",
-		"incarnation",
+		"dev",
+		testInstallationID,
+		testAccountIncarnationID,
 		"",
 	)
 	require.ErrorIs(t, err, ErrCapabilityInvalid)
 
 	_, err = ExpectedConversationCommitment(
-		"development",
-		"installation",
-		"incarnation",
+		"dev",
+		testInstallationID,
+		testAccountIncarnationID,
 		"conversation\u2028identifier",
 	)
 	require.ErrorIs(t, err, ErrCapabilityInvalid)

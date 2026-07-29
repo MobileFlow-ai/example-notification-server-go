@@ -23,6 +23,11 @@ func ExpectedConversationCommitment(
 	accountIncarnationID string,
 	expectedConversationID string,
 ) ([sha256.Size]byte, error) {
+	if !ValidEnvironment(environment) ||
+		!ValidInstallationID(installationID) ||
+		!ValidAccountIncarnationID(accountIncarnationID) {
+		return [sha256.Size]byte{}, ErrCapabilityInvalid
+	}
 	values := []string{
 		environment,
 		installationID,

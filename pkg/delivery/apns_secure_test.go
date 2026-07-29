@@ -37,7 +37,7 @@ func secureDeliveryFixture(
 	routeAlias, err := gate8wrapper.DeriveRouteAlias(
 		routeKey,
 		req.Subscription.TopicV4.Bytes(),
-		gate8wrapper.EnvironmentDevelopment,
+		gate8wrapper.EnvironmentDev,
 		aliasDay,
 	)
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func secureDeliveryFixture(
 		opts: options.ApnsOptions{
 			Topic:                 "com.example.app.dev",
 			SecureWrapperRequired: true,
-			SecureEnvironment:     "development",
+			SecureEnvironment:     "dev",
 		},
 		now: func() time.Time { return now },
 	}
@@ -119,7 +119,7 @@ func TestSecureAPNSPayloadContainsOnlyAliasWrapperAndGenericAlert(t *testing.T) 
 	opened, err := gate8wrapper.Open(gate8wrapper.OpenRequest{
 		RouteKey:              req.Subscription.SecureRoute.RouteKey,
 		Topic:                 req.Subscription.TopicV4.Bytes(),
-		ExpectedEnvironment:   gate8wrapper.EnvironmentDevelopment,
+		ExpectedEnvironment:   gate8wrapper.EnvironmentDev,
 		ExpectedAliasDay:      gate8wrapper.UTCDay(now),
 		ExpectedRouteKeyEpoch: req.Subscription.SecureRoute.RouteKeyEpoch,
 		Envelope:              wrapped,
@@ -150,7 +150,7 @@ func TestSecureAPNSCompactWelcomeRegression(t *testing.T) {
 	opened, err := gate8wrapper.Open(gate8wrapper.OpenRequest{
 		RouteKey:              req.Subscription.SecureRoute.RouteKey,
 		Topic:                 req.Subscription.TopicV4.Bytes(),
-		ExpectedEnvironment:   gate8wrapper.EnvironmentDevelopment,
+		ExpectedEnvironment:   gate8wrapper.EnvironmentDev,
 		ExpectedAliasDay:      gate8wrapper.UTCDay(now),
 		ExpectedRouteKeyEpoch: req.Subscription.SecureRoute.RouteKeyEpoch,
 		Envelope:              wrapped,

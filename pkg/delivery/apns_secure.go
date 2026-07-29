@@ -69,7 +69,7 @@ func (a ApnsDelivery) buildSecureNotification(
 
 	environment := gate8wrapper.Environment(a.opts.SecureEnvironment)
 	if environment == "" {
-		environment = gate8wrapper.EnvironmentDevelopment
+		environment = gate8wrapper.EnvironmentDev
 	}
 	var noncePrefix [gate8wrapper.NoncePrefixSize]byte
 	binary.BigEndian.PutUint32(noncePrefix[:], route.NoncePrefix)

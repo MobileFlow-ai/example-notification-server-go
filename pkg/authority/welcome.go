@@ -2,7 +2,6 @@ package authority
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -55,7 +54,7 @@ type WelcomeVerifyOptions struct {
 // representation. Accepted text is bounded ASCII, so no locale or Unicode
 // normalization can alter the signed bytes.
 func (a WelcomeAuthorizationV1) SigningBytes() ([]byte, error) {
-	if !validWelcomeCanonicalIntegers(a) {
+	if !validWelcomeAuthorizationSigningShape(a) {
 		return nil, ErrWelcomeAuthorizationInvalid
 	}
 	unsigned := struct {
@@ -101,7 +100,13 @@ func VerifyWelcomeAuthorization(
 	keys map[string]ed25519.PublicKey,
 	opts WelcomeVerifyOptions,
 ) error {
-	if !validWelcomeAuthorizationShape(authorization) {
+	if !validWelcomeAuthorizationShape(authorization) ||
+		(opts.ExpectedEnvironment != "" &&
+			!ValidEnvironment(opts.ExpectedEnvironment)) ||
+		(opts.ExpectedInstallationID != "" &&
+			!ValidInstallationID(opts.ExpectedInstallationID)) ||
+		(opts.ExpectedAccountIncarnationID != "" &&
+			!ValidAccountIncarnationID(opts.ExpectedAccountIncarnationID)) {
 		return ErrWelcomeAuthorizationInvalid
 	}
 	if authorization.Algorithm != "Ed25519" {
@@ -111,8 +116,8 @@ func VerifyWelcomeAuthorization(
 	if !ok || len(publicKey) != ed25519.PublicKeySize {
 		return ErrWelcomeAuthorizationKeyState
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(authorization.Signature)
-	if err != nil || len(signature) != ed25519.SignatureSize {
+	signature, canonical := decodeCanonicalRawURLBase64(authorization.Signature)
+	if !canonical || len(signature) != ed25519.SignatureSize {
 		return ErrWelcomeAuthorizationInvalid
 	}
 	signingBytes, err := authorization.SigningBytes()
@@ -169,13 +174,18 @@ func VerifyWelcomeAuthorization(
 }
 
 func validWelcomeAuthorizationShape(a WelcomeAuthorizationV1) bool {
-	if !validWelcomeCanonicalIntegers(a) {
+	return validWelcomeAuthorizationSigningShape(a) &&
+		validASCIIField(a.Signature, 1, maxCapabilityFieldBytes)
+}
+
+func validWelcomeAuthorizationSigningShape(a WelcomeAuthorizationV1) bool {
+	if !validWelcomeCanonicalIntegers(a) ||
+		!ValidEnvironment(a.Environment) ||
+		!ValidInstallationID(a.InstallationID) ||
+		!ValidAccountIncarnationID(a.AccountIncarnationID) {
 		return false
 	}
 	for _, value := range []string{
-		a.Environment,
-		a.InstallationID,
-		a.AccountIncarnationID,
 		a.TopicDigest,
 		a.OuterEnvelopeDigest,
 		a.ExpectedConversationCommitment,
@@ -184,7 +194,6 @@ func validWelcomeAuthorizationShape(a WelcomeAuthorizationV1) bool {
 		a.ExpiresAt,
 		a.SigningKeyID,
 		a.Algorithm,
-		a.Signature,
 	} {
 		if !validASCIIField(value, 1, maxCapabilityFieldBytes) {
 			return false
@@ -195,8 +204,8 @@ func validWelcomeAuthorizationShape(a WelcomeAuthorizationV1) bool {
 		!validLowerHexDigest(a.ExpectedConversationCommitment) {
 		return false
 	}
-	nonce, err := base64.RawURLEncoding.DecodeString(a.Nonce)
-	return err == nil && len(nonce) >= 16 && len(nonce) <= 64
+	nonce, canonical := decodeCanonicalRawURLBase64(a.Nonce)
+	return canonical && len(nonce) >= 16 && len(nonce) <= 64
 }
 
 func validWelcomeCanonicalIntegers(a WelcomeAuthorizationV1) bool {

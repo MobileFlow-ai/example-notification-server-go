@@ -29,7 +29,7 @@ func (protect replayProtectorFunc) CompareAndAdvanceAuthenticated(
 func TestOpenRequiresReplayProtector(t *testing.T) {
 	envelope := sealReplayEnvelope(
 		t,
-		EnvironmentDevelopment,
+		EnvironmentDev,
 		"2026-07-28",
 		[]byte("topic-a"),
 		2,
@@ -66,7 +66,7 @@ func TestOpenRequiresReplayProtector(t *testing.T) {
 func TestOpenFailsClosedWhenDurableAdvanceFails(t *testing.T) {
 	envelope := sealReplayEnvelope(
 		t,
-		EnvironmentDevelopment,
+		EnvironmentDev,
 		"2026-07-28",
 		[]byte("topic-a"),
 		2,
@@ -93,7 +93,7 @@ func TestOpenFailsClosedWhenDurableAdvanceFails(t *testing.T) {
 
 func TestReplayWindowRejectsLowerSequenceAndRestoresHighWater(t *testing.T) {
 	scope := replayScope{
-		environment: EnvironmentDevelopment,
+		environment: EnvironmentDev,
 		aliasDay:    "2026-07-28",
 		topic:       []byte("topic-a"),
 		routeEpoch:  2,
@@ -138,7 +138,7 @@ func TestReplayWindowRejectsLowerSequenceAndRestoresHighWater(t *testing.T) {
 
 func TestReplayWindowRejectsEveryScopeChange(t *testing.T) {
 	baseline := replayScope{
-		environment: EnvironmentDevelopment,
+		environment: EnvironmentDev,
 		aliasDay:    "2026-07-28",
 		topic:       []byte("topic-a"),
 		routeEpoch:  2,
@@ -226,7 +226,7 @@ func TestReplayWindowRejectsEveryScopeChange(t *testing.T) {
 
 func TestUnauthenticatedHighSequenceCannotPoisonReplay(t *testing.T) {
 	scope := replayScope{
-		environment: EnvironmentDevelopment,
+		environment: EnvironmentDev,
 		aliasDay:    "2026-07-28",
 		topic:       []byte("topic-a"),
 		routeEpoch:  2,
@@ -254,7 +254,7 @@ func TestRestoreReplayWindowRejectsInvalidState(t *testing.T) {
 	_, err := RestoreReplayWindow(ReplayState{})
 	require.ErrorIs(t, err, ErrReplayState)
 	_, err = RestoreReplayWindow(ReplayState{
-		Environment:     EnvironmentDevelopment,
+		Environment:     EnvironmentDev,
 		AliasDay:        "2026-07-28",
 		RouteKeyEpoch:   1,
 		HighestSequence: MaxCanonicalInteger + 1,

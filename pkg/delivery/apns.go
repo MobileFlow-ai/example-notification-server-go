@@ -105,14 +105,16 @@ func validateSecureAPNSOptions(opts options.ApnsOptions) error {
 	if !opts.SecureWrapperRequired {
 		return nil
 	}
+	providerMode, validEnvironment :=
+		options.APNSModeForBridgeEnvironment(opts.SecureEnvironment)
 	if opts.P8CertificateBase64 == "" ||
 		opts.P8Certificate != "" ||
 		opts.P8CertificateFilePath != "" ||
 		opts.KeyId == "" ||
 		opts.TeamId == "" ||
 		opts.Topic == "" ||
-		opts.SecureEnvironment == "" ||
-		opts.SecureEnvironment != opts.Mode {
+		!validEnvironment ||
+		providerMode != opts.Mode {
 		return errors.New("secure APNS configuration invalid")
 	}
 	return nil

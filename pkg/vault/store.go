@@ -108,6 +108,7 @@ type Store struct {
 	db                      *sql.DB
 	environment             string
 	environmentID           int16
+	lookupEnvironment       string
 	leaseTTL                time.Duration
 	encryption              *Keyring
 	lookup                  *LookupKey
@@ -120,11 +121,16 @@ type Store struct {
 }
 
 func NewStore(db *sql.DB, opts StoreOptions) (*Store, error) {
-	if db == nil || opts.Encryption == nil || opts.Lookup == nil ||
+	if opts.WelcomeEnabled ||
+		db == nil || opts.Encryption == nil || opts.Lookup == nil ||
 		len(opts.AuthorityKeys) == 0 {
 		return nil, ErrStoreUnavailable
 	}
 	environmentID, err := encodeEnvironment(opts.Environment)
+	if err != nil {
+		return nil, err
+	}
+	lookupEnvironment, err := stableLookupEnvironment(opts.Environment)
 	if err != nil {
 		return nil, err
 	}
@@ -147,12 +153,13 @@ func NewStore(db *sql.DB, opts StoreOptions) (*Store, error) {
 		db:                      db,
 		environment:             opts.Environment,
 		environmentID:           environmentID,
+		lookupEnvironment:       lookupEnvironment,
 		leaseTTL:                leaseTTL,
 		encryption:              opts.Encryption,
 		lookup:                  opts.Lookup,
 		authorityKeys:           opts.AuthorityKeys,
 		teenConversationEnabled: opts.TeenConversationEnabled,
-		welcomeEnabled:          opts.WelcomeEnabled,
+		welcomeEnabled:          false,
 		now:                     now,
 		random:                  random,
 		aggregateRandom:         rand.Reader,
@@ -161,12 +168,12 @@ func NewStore(db *sql.DB, opts StoreOptions) (*Store, error) {
 
 func (s *Store) Refresh(ctx context.Context, request RefreshRequest) (*RefreshResult, error) {
 	now := s.now().UTC()
-	if err := s.RequireRetentionSafe(ctx); err != nil {
-		return nil, ErrStoreUnavailable
-	}
 	normalized, err := s.validateRefresh(request, now)
 	if err != nil {
 		return nil, err
+	}
+	if err = s.RequireRetentionSafe(ctx); err != nil {
+		return nil, ErrStoreUnavailable
 	}
 	requestDigest, err := semanticRefreshDigest(request)
 	if err != nil {
@@ -488,17 +495,16 @@ func (s *Store) validateRefresh(
 	now time.Time,
 ) ([]normalizedSubscription, error) {
 	if request.Environment != s.environment ||
+		!authority.ValidEnvironment(request.Environment) ||
 		request.Generation == 0 ||
 		request.Generation > gate8wrapper.MaxCanonicalInteger ||
 		request.PayloadSchema != "hytch_push_wrapper_v1" ||
-		len(request.InstallationID) == 0 ||
-		len(request.InstallationID) > 128 ||
-		len(request.AccountIncarnationID) == 0 ||
-		len(request.AccountIncarnationID) > 128 ||
+		!authority.ValidInstallationID(request.InstallationID) ||
+		!authority.ValidAccountIncarnationID(request.AccountIncarnationID) ||
 		len(request.IdempotencyKey) < 16 ||
 		len(request.IdempotencyKey) > 128 ||
 		len(request.APNSToken) != 32 ||
-		len(request.Subscriptions) == 0 ||
+		request.Subscriptions == nil ||
 		len(request.Subscriptions) > maxRefreshTopics {
 		return nil, ErrRefreshInvalid
 	}
@@ -528,7 +534,6 @@ func (s *Store) validateRefresh(
 	}
 	seen := make(map[string]struct{}, len(request.Subscriptions))
 	normalized := make([]normalizedSubscription, 0, len(request.Subscriptions))
-	hasWelcome := false
 	for _, subscription := range request.Subscriptions {
 		parsed, err := topic.ParseTopic(subscription.Topic)
 		if err != nil || len(subscription.RouteKey) != 32 ||
@@ -548,13 +553,10 @@ func (s *Store) validateRefresh(
 				return nil, err
 			}
 		case topic.TopicKindWelcomeMessagesV1:
-			kind = topicWelcome
-			hasWelcome = true
-			if len(subscription.HMACKeys) != 0 ||
-				subscription.Capability.ExpectedConversationCommitment == "" ||
-				subscription.Capability.PushMode != authority.PushModeSuppressed {
-				return nil, ErrRefreshInvalid
-			}
+			// Welcome is hard-closed in this build. Reject its route material
+			// before any retention lookup or persistence rather than retaining a
+			// dormant signed capability, topic, or route key.
+			return nil, ErrRefreshInvalid
 		default:
 			return nil, ErrRefreshInvalid
 		}
@@ -616,9 +618,6 @@ func (s *Store) validateRefresh(
 			issuedAt:      issuedAt.UTC(),
 			capExpiresAt:  capExpiresAt.UTC(),
 		})
-	}
-	if !hasWelcome {
-		return nil, ErrRefreshInvalid
 	}
 	return normalized, nil
 }
@@ -695,6 +694,9 @@ func (s *Store) findInstallation(
 	installationID string,
 	now time.Time,
 ) (*installationState, error) {
+	if !authority.ValidInstallationID(installationID) {
+		return nil, ErrRefreshInvalid
+	}
 	expectedIdentity, err := s.installationDeletionIdentity(installationID)
 	if err != nil {
 		return nil, ErrStoreUnavailable
@@ -1083,12 +1085,13 @@ func (s *Store) routeHistoryIdentity(
 	installationID string,
 	rawTopic []byte,
 ) ([]byte, error) {
-	if s == nil || s.lookup == nil || len(installationID) == 0 ||
+	if s == nil || s.lookup == nil ||
+		!authority.ValidInstallationID(installationID) ||
 		len(rawTopic) == 0 {
 		return nil, ErrStoreUnavailable
 	}
 	input := lengthDelimited(
-		[]byte(s.environment),
+		[]byte(s.lookupEnvironment),
 		[]byte(installationID),
 		rawTopic,
 	)
@@ -1103,11 +1106,12 @@ func (s *Store) routeHistoryIdentity(
 func (s *Store) installationDeletionIdentity(
 	installationID string,
 ) ([]byte, error) {
-	if s == nil || s.lookup == nil || len(installationID) == 0 {
+	if s == nil || s.lookup == nil ||
+		!authority.ValidInstallationID(installationID) {
 		return nil, ErrStoreUnavailable
 	}
 	input := lengthDelimited(
-		[]byte(s.environment),
+		[]byte(s.lookupEnvironment),
 		[]byte(installationID),
 	)
 	defer zero(input)
@@ -1438,7 +1442,7 @@ func (s *Store) countActiveLeases(
 
 func encodeEnvironment(value string) (int16, error) {
 	switch value {
-	case "development":
+	case "dev":
 		return environmentDevelopment, nil
 	case "production":
 		return environmentProduction, nil
@@ -1447,28 +1451,46 @@ func encodeEnvironment(value string) (int16, error) {
 	}
 }
 
+// stableLookupEnvironment preserves the original vault lookup/tombstone
+// namespace while the signed A9 and wrapper wire enum uses "dev". Re-keying
+// these identities on an enum spelling change would orphan live ciphertext and,
+// more importantly, make existing deletion fences unreachable.
+func stableLookupEnvironment(value string) (string, error) {
+	switch value {
+	case authority.EnvironmentDev:
+		return "development", nil
+	case authority.EnvironmentProduction:
+		return authority.EnvironmentProduction, nil
+	default:
+		return "", ErrRefreshInvalid
+	}
+}
+
 // environmentLookupDigest prevents stores that intentionally share the vault
 // schema and lookup root from addressing each other's installations,
 // incarnations, topics, or route-key history. The label and length-delimited
-// environment make the separation explicit and unambiguous.
+// stable lookup namespace make the separation explicit and unambiguous.
 func (s *Store) environmentLookupDigest(
 	domain string,
 	epoch uint64,
 	value []byte,
 ) ([]byte, error) {
 	if s == nil || s.lookup == nil || s.environmentID == 0 ||
-		len(s.environment) == 0 || len(value) == 0 {
+		len(s.lookupEnvironment) == 0 || len(value) == 0 {
 		return nil, ErrLookupUnavailable
 	}
 	input := make(
 		[]byte,
 		0,
 		len("hytch.push.vault.environment.v1\x00")+
-			16+len(s.environment)+len(value),
+			16+len(s.lookupEnvironment)+len(value),
 	)
 	input = append(input, "hytch.push.vault.environment.v1\x00"...)
-	input = binary.BigEndian.AppendUint64(input, uint64(len(s.environment)))
-	input = append(input, s.environment...)
+	input = binary.BigEndian.AppendUint64(
+		input,
+		uint64(len(s.lookupEnvironment)),
+	)
+	input = append(input, s.lookupEnvironment...)
 	input = binary.BigEndian.AppendUint64(input, uint64(len(value)))
 	input = append(input, value...)
 	defer zero(input)

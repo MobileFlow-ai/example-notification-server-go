@@ -217,6 +217,7 @@ func assertLegacyActivationMigration(
 		        'reject_legacy_routing_mutation',
 		        'activate_legacy_routing_retirement'
 		    )
+		    AND routine.pronargdefaults = 0
 		    AND routine.prosecdef
 		    AND routine.proconfig = ARRAY[
 		        'search_path=pg_catalog'

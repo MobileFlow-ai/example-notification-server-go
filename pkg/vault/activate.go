@@ -18,8 +18,8 @@ var ErrLegacyRoutingBarrierInvalid = errors.New(
 const (
 	rejectLegacyRoutingSourceSHA256 = "f5bb3a1e800aa0d2cd92be9e8844e90d" +
 		"f1b12d6550642dc1562287fe25e86137"
-	activateLegacyRoutingSourceSHA256 = "eb9c48abb59f1b2229365b1c3550d3ae" +
-		"fe4e9753b8d05f6ec1f7cae43bae5b52"
+	activateLegacyRoutingSourceSHA256 = "8087f6e2453e28ed7df95deada8dd1b9" +
+		"9876212fff5b53edbec745fff504e222"
 )
 
 // RequireLegacyPlaintextRoutingDisabled verifies the database-wide activation
@@ -96,6 +96,7 @@ func (s *Store) RequireLegacyPlaintextRoutingDisabled(
 		        AND routine.proname =
 		            'reject_legacy_routing_mutation'
 		        AND routine.pronargs = 0
+		        AND routine.pronargdefaults = 0
 		 ),
 		 activation_routine AS (
 		     SELECT routine.*
@@ -106,6 +107,7 @@ func (s *Store) RequireLegacyPlaintextRoutingDisabled(
 		        AND routine.proname =
 		            'activate_legacy_routing_retirement'
 		        AND routine.pronargs = 1
+		        AND routine.pronargdefaults = 0
 		        AND routine.proargtypes[0] =
 		            'pg_catalog.text'::pg_catalog.regtype
 		 ),

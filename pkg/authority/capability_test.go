@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -23,23 +25,22 @@ func signedCapabilityWithTTL(
 	require.NoError(t, err)
 
 	capability := ReceiveCapabilityV1{
-		SchemaVersion:                  1,
-		Environment:                    "development",
-		InstallationID:                 "installation",
-		AccountIncarnationID:           "incarnation",
-		PolicyEpoch:                    9,
-		TopicDigest:                    hex.EncodeToString(make([]byte, 32)),
-		AliasDay:                       now.UTC().Format(time.DateOnly),
-		RouteAlias:                     base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
-		ConversationGrantVersion:       3,
-		RosterVersion:                  4,
-		ExpectedConversationCommitment: "",
-		PushMode:                       PushModeAlertAllowed,
-		IssuedAt:                       now.UTC().Format(time.RFC3339Nano),
-		ExpiresAt:                      now.Add(ttl).UTC().Format(time.RFC3339Nano),
-		Nonce:                          base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
-		SigningKeyID:                   "test-key",
-		Algorithm:                      "Ed25519",
+		SchemaVersion:            1,
+		Environment:              "dev",
+		InstallationID:           testInstallationID,
+		AccountIncarnationID:     testAccountIncarnationID,
+		PolicyEpoch:              9,
+		TopicDigest:              hex.EncodeToString(make([]byte, 32)),
+		AliasDay:                 now.UTC().Format(time.DateOnly),
+		RouteAlias:               base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
+		ConversationGrantVersion: 3,
+		RosterVersion:            4,
+		PushMode:                 PushModeAlertAllowed,
+		IssuedAt:                 now.UTC().Format(time.RFC3339Nano),
+		ExpiresAt:                now.Add(ttl).UTC().Format(time.RFC3339Nano),
+		Nonce:                    base64.RawURLEncoding.EncodeToString(make([]byte, 16)),
+		SigningKeyID:             "test-key",
+		Algorithm:                "Ed25519",
 	}
 	signingBytes, err := capability.SigningBytes()
 	require.NoError(t, err)
@@ -54,6 +55,35 @@ func signedCapability(t *testing.T, now time.Time) (ReceiveCapabilityV1, map[str
 	return signedCapabilityWithTTL(t, now, 45*time.Second)
 }
 
+func noncanonicalRawURLTrailingBits(t *testing.T, canonical string) string {
+	t.Helper()
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+	var trailingBitMask int
+	switch len(canonical) % 4 {
+	case 2:
+		trailingBitMask = 0x0f
+	case 3:
+		trailingBitMask = 0x03
+	default:
+		t.Fatalf("encoding has no unused trailing bits: %q", canonical)
+	}
+	lastIndex := strings.IndexByte(alphabet, canonical[len(canonical)-1])
+	require.NotEqual(t, -1, lastIndex)
+	require.Zero(t, lastIndex&trailingBitMask)
+
+	malleated := canonical[:len(canonical)-1] +
+		string(alphabet[lastIndex|1])
+	canonicalBytes, err := base64.RawURLEncoding.DecodeString(canonical)
+	require.NoError(t, err)
+	malleatedBytes, err := base64.RawURLEncoding.DecodeString(malleated)
+	require.NoError(t, err)
+	require.Equal(t, canonicalBytes, malleatedBytes)
+	_, err = base64.RawURLEncoding.Strict().DecodeString(malleated)
+	require.Error(t, err)
+	return malleated
+}
+
 func TestVerifyReceiveCapability(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	capability, keys := signedCapability(t, now)
@@ -61,9 +91,9 @@ func TestVerifyReceiveCapability(t *testing.T) {
 	err := VerifyReceiveCapability(capability, keys, VerifyOptions{
 		Now:                          now.Add(time.Second),
 		MaxTTL:                       time.Minute,
-		ExpectedEnvironment:          "development",
-		ExpectedInstallationID:       "installation",
-		ExpectedAccountIncarnationID: "incarnation",
+		ExpectedEnvironment:          "dev",
+		ExpectedInstallationID:       testInstallationID,
+		ExpectedAccountIncarnationID: testAccountIncarnationID,
 		ExpectedTopicDigest:          capability.TopicDigest,
 	})
 	require.NoError(t, err)
@@ -113,14 +143,9 @@ func TestVerifyReceiveCapabilityFailsClosed(t *testing.T) {
 		},
 		{
 			name: "installation mismatch",
-			opts: VerifyOptions{Now: now, ExpectedInstallationID: "other"},
-			want: ErrCapabilityInvalid,
-		},
-		{
-			name: "expected conversation mismatch",
 			opts: VerifyOptions{
-				Now:                            now,
-				ExpectedConversationCommitment: strings.Repeat("a", 64),
+				Now:                    now,
+				ExpectedInstallationID: testOtherInstallationID,
 			},
 			want: ErrCapabilityInvalid,
 		},
@@ -140,6 +165,144 @@ func TestVerifyReceiveCapabilityFailsClosed(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errors.Is(err, test.want), "got %v, want %v", err, test.want)
 		})
+	}
+}
+
+func TestReceiveCapabilityV1HasExactGate6Shape(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	capability, _ := signedCapability(t, now)
+
+	encoded, err := json.Marshal(capability)
+	require.NoError(t, err)
+	var object map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &object))
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	require.Equal(t, []string{
+		"account_incarnation_id",
+		"algorithm",
+		"alias_day",
+		"conversation_grant_version",
+		"environment",
+		"expires_at",
+		"installation_id",
+		"issued_at",
+		"nonce",
+		"policy_epoch",
+		"push_mode",
+		"roster_version",
+		"route_alias",
+		"schema_version",
+		"signature",
+		"signing_key_id",
+		"topic_digest",
+	}, keys)
+
+	signingBytes, err := capability.SigningBytes()
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"Hytch safety receive capability v1\x00"+
+			`{"account_incarnation_id":"`+testAccountIncarnationID+`",`+
+			`"algorithm":"Ed25519","alias_day":"2026-07-26",`+
+			`"conversation_grant_version":3,"environment":"dev",`+
+			`"expires_at":"2026-07-26T12:00:45Z",`+
+			`"installation_id":"`+testInstallationID+`",`+
+			`"issued_at":"2026-07-26T12:00:00Z",`+
+			`"nonce":"AAAAAAAAAAAAAAAAAAAAAA","policy_epoch":9,`+
+			`"push_mode":"alert_allowed","roster_version":4,`+
+			`"route_alias":"AAAAAAAAAAAAAAAAAAAAAA","schema_version":1,`+
+			`"signing_key_id":"test-key",`+
+			`"topic_digest":"`+strings.Repeat("0", 64)+`"}`,
+		string(signingBytes),
+	)
+}
+
+func TestReceiveCapabilityRejectsNoncanonicalRawURLBase64(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	valid, keys := signedCapability(t, now)
+
+	t.Run("signature", func(t *testing.T) {
+		capability := valid
+		capability.Signature = noncanonicalRawURLTrailingBits(
+			t,
+			capability.Signature,
+		)
+		require.ErrorIs(
+			t,
+			VerifyReceiveCapability(
+				capability,
+				keys,
+				VerifyOptions{Now: now},
+			),
+			ErrCapabilityInvalid,
+		)
+	})
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*ReceiveCapabilityV1)
+	}{
+		{
+			name: "nonce",
+			mutate: func(capability *ReceiveCapabilityV1) {
+				capability.Nonce = noncanonicalRawURLTrailingBits(
+					t,
+					capability.Nonce,
+				)
+			},
+		},
+		{
+			name: "route alias",
+			mutate: func(capability *ReceiveCapabilityV1) {
+				capability.RouteAlias = noncanonicalRawURLTrailingBits(
+					t,
+					capability.RouteAlias,
+				)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capability := valid
+			test.mutate(&capability)
+			_, err := capability.SigningBytes()
+			require.ErrorIs(t, err, ErrCapabilityInvalid)
+		})
+	}
+
+	t.Run("public key", func(t *testing.T) {
+		encodedKey := base64.RawURLEncoding.EncodeToString(keys["test-key"])
+		encodedKey = noncanonicalRawURLTrailingBits(t, encodedKey)
+		_, err := ParsePublicKeyring(`{"test-key":"` + encodedKey + `"}`)
+		require.ErrorIs(t, err, ErrCapabilityKeyState)
+	})
+}
+
+func TestReceiveCapabilitySigningRejectsNoncanonicalAuthorityFields(
+	t *testing.T,
+) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	valid, _ := signedCapability(t, now)
+	for _, mutate := range []func(*ReceiveCapabilityV1){
+		func(capability *ReceiveCapabilityV1) {
+			capability.Environment = "development"
+		},
+		func(capability *ReceiveCapabilityV1) {
+			capability.InstallationID = strings.ToUpper(testInstallationID)
+		},
+		func(capability *ReceiveCapabilityV1) {
+			capability.AccountIncarnationID = strings.ToUpper(
+				testAccountIncarnationID,
+			)
+		},
+	} {
+		capability := valid
+		mutate(&capability)
+		_, err := capability.SigningBytes()
+		require.ErrorIs(t, err, ErrCapabilityInvalid)
 	}
 }
 

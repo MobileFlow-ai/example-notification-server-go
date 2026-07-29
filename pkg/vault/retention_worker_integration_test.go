@@ -20,7 +20,7 @@ func TestRetentionAdvisoryLockContentionPreservesSharedHealth(t *testing.T) {
 		db,
 		RetentionOptions{
 			SweepInterval:        15 * time.Minute,
-			Environment:          "development",
+			Environment:          "dev",
 			Lookup:               lookup,
 			EncryptionKeyVersion: 1,
 			Now:                  func() time.Time { return now },
@@ -65,11 +65,6 @@ func TestGetInstallationsAfterFreshLookupBinding(t *testing.T) {
 		topicpkg.TopicKindGroupMessagesV1,
 		0x43,
 	)
-	welcome := testTopic(
-		t,
-		topicpkg.TopicKindWelcomeMessagesV1,
-		0x45,
-	)
 	control := fixture.policy(
 		t,
 		1,
@@ -90,15 +85,6 @@ func TestGetInstallationsAfterFreshLookupBinding(t *testing.T) {
 				1,
 				688,
 				authority.PushModeAlertAllowed,
-				1,
-			),
-			fixture.subscription(
-				t,
-				welcome,
-				0x46,
-				1,
-				688,
-				authority.PushModeSuppressed,
 				1,
 			),
 		),
@@ -163,11 +149,6 @@ func TestRetentionTombstonesPreserveErasedEpochAndKeyVersion(t *testing.T) {
 		topicpkg.TopicKindGroupMessagesV1,
 		0x53,
 	)
-	welcome := testTopic(
-		t,
-		topicpkg.TopicKindWelcomeMessagesV1,
-		0x54,
-	)
 	control := fixture.policy(
 		t,
 		9,
@@ -188,15 +169,6 @@ func TestRetentionTombstonesPreserveErasedEpochAndKeyVersion(t *testing.T) {
 				5,
 				688,
 				authority.PushModeAlertAllowed,
-				9,
-			),
-			fixture.subscription(
-				t,
-				welcome,
-				0x56,
-				6,
-				688,
-				authority.PushModeSuppressed,
 				9,
 			),
 		),
@@ -240,7 +212,7 @@ func TestRetentionTombstonesPreserveErasedEpochAndKeyVersion(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	require.Len(t, routes, 2)
+	require.Len(t, routes, 1)
 
 	_, err = db.ExecContext(
 		t.Context(),

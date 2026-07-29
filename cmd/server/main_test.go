@@ -31,6 +31,16 @@ func TestCheckedSecureLeaseTTLAcceptsBoundedHours(t *testing.T) {
 	require.Equal(t, 7*24*time.Hour, duration)
 }
 
+func TestWelcomeRuntimeConfigurationIsHardClosed(t *testing.T) {
+	require.True(t, welcomeRuntimeConfigurationValid(false))
+	require.False(t, welcomeRuntimeConfigurationValid(true))
+}
+
+func TestAPNSRuntimeConfigurationIsHardClosed(t *testing.T) {
+	require.True(t, apnsRuntimeConfigurationValid(false))
+	require.False(t, apnsRuntimeConfigurationValid(true))
+}
+
 func TestCheckedXMTPWorkerCountRejectsInvalidAndOverflowValues(t *testing.T) {
 	for _, workers := range []int{
 		-math.MaxInt - 1,
@@ -207,7 +217,7 @@ func TestRailwayDevConfigPinsDevelopmentEnvironments(t *testing.T) {
 	require.Contains(
 		t,
 		startCommand,
-		"--bridge-environment=development",
+		"--bridge-environment=dev",
 	)
 	require.Contains(t, startCommand, "--apns-mode=development")
 	require.Contains(

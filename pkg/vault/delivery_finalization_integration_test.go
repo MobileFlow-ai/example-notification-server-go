@@ -34,11 +34,6 @@ func newDeliveryFinalizationFixture(
 		topicpkg.TopicKindGroupMessagesV1,
 		0x7a,
 	)
-	welcome := testTopic(
-		t,
-		topicpkg.TopicKindWelcomeMessagesV1,
-		0x7c,
-	)
 	control := fixture.policy(
 		t,
 		1,
@@ -57,15 +52,6 @@ func newDeliveryFinalizationFixture(
 			1,
 			period,
 			authority.PushModeAlertAllowed,
-			1,
-		),
-		fixture.subscription(
-			t,
-			welcome,
-			0x7d,
-			1,
-			period,
-			authority.PushModeSuppressed,
 			1,
 		),
 	)
@@ -449,7 +435,7 @@ func TestRetentionSweepCommitsBoundedFinalizationProgress(t *testing.T) {
 	store := &Store{
 		db:              database,
 		encryption:      keyring,
-		environment:     "development",
+		environment:     "dev",
 		environmentID:   environmentDevelopment,
 		now:             func() time.Time { return now },
 		aggregateRandom: &sequenceReader{},
@@ -458,7 +444,7 @@ func TestRetentionSweepCommitsBoundedFinalizationProgress(t *testing.T) {
 		database,
 		RetentionOptions{
 			SweepInterval:        15 * time.Minute,
-			Environment:          "development",
+			Environment:          "dev",
 			Lookup:               lookup,
 			EncryptionKeyVersion: keyring.ActiveVersion(),
 			Now:                  func() time.Time { return now },

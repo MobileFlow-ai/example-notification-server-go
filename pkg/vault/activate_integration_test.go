@@ -61,6 +61,58 @@ func TestLegacyRoutingRetirementRequiresExactConfirmationAndPreservesVault(
 	)
 }
 
+func TestLegacyRoutingRetirementRejectsMarkerColumnDriftBeforeDrop(
+	t *testing.T,
+) {
+	requireVaultIntegrationTests(t)
+	tests := map[string]string{
+		"extra column": `ALTER TABLE
+			hytch_push_vault.legacy_routing_activation
+			ADD COLUMN unexpected TEXT`,
+		"nullable activated at": `ALTER TABLE
+			hytch_push_vault.legacy_routing_activation
+			ALTER COLUMN activated_at DROP NOT NULL`,
+	}
+	for name, statement := range tests {
+		t.Run(name, func(t *testing.T) {
+			db := testdb.CreateTestDb(t)
+			seedLegacyRouting(t, db)
+			before := captureLegacyRoutingSnapshot(t, db)
+			_, err := db.ExecContext(t.Context(), statement)
+			require.NoError(t, err)
+
+			_, err = db.ExecContext(
+				t.Context(),
+				`SELECT
+				     hytch_push_vault.
+				     activate_legacy_routing_retirement($1)`,
+				legacyRoutingRetirementConfirmation(t, db),
+			)
+			requireSQLState(t, err, "55000")
+			require.Equal(t, before, captureLegacyRoutingSnapshot(t, db))
+			requireActivationMarkerCount(t, db, 0)
+		})
+	}
+}
+
+func TestLegacyRoutingRetirementRejectsDefaultedConfirmationBeforeDrop(
+	t *testing.T,
+) {
+	requireVaultIntegrationTests(t)
+	db := testdb.CreateTestDb(t)
+	seedLegacyRouting(t, db)
+	before := captureLegacyRoutingSnapshot(t, db)
+	addLegacyRetirementConfirmationDefault(t, db)
+
+	_, err := db.ExecContext(
+		t.Context(),
+		`SELECT hytch_push_vault.activate_legacy_routing_retirement()`,
+	)
+	requireSQLState(t, err, "55000")
+	require.Equal(t, before, captureLegacyRoutingSnapshot(t, db))
+	requireActivationMarkerCount(t, db, 0)
+}
+
 func TestLegacyRoutingRetirementCannotBeBypassedByReplicaRole(
 	t *testing.T,
 ) {
@@ -276,6 +328,13 @@ func TestLegacyRoutingGateRejectsBarrierTampering(t *testing.T) {
 					 $function$`,
 				)
 				require.NoError(t, err)
+			},
+			wantErr: ErrLegacyRoutingBarrierInvalid,
+		},
+		{
+			name: "activation function default argument",
+			tamper: func(t *testing.T, db *sql.DB, _ string) {
+				addLegacyRetirementConfirmationDefault(t, db)
 			},
 			wantErr: ErrLegacyRoutingBarrierInvalid,
 		},
@@ -693,6 +752,57 @@ func activateLegacyRoutingRetirement(t *testing.T, db *sql.DB) {
 		legacyRoutingRetirementConfirmation(t, db),
 	)
 	require.NoError(t, err)
+}
+
+func addLegacyRetirementConfirmationDefault(
+	t *testing.T,
+	db *sql.DB,
+) {
+	t.Helper()
+	var (
+		definition   string
+		sourceBefore string
+		databaseName string
+	)
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT pg_catalog.pg_get_functiondef(routine.oid),
+		        routine.prosrc,
+		        pg_catalog.current_database()
+		   FROM pg_catalog.pg_proc AS routine
+		  WHERE routine.oid =
+		        'hytch_push_vault.activate_legacy_routing_retirement(text)'
+		            ::pg_catalog.regprocedure`,
+	).Scan(&definition, &sourceBefore, &databaseName))
+
+	const signatureSuffix = "confirmation text)"
+	defaultConfirmation := "RETIRE LEGACY PLAINTEXT ROUTING FROM " +
+		databaseName
+	defaultedDefinition := strings.Replace(
+		definition,
+		signatureSuffix,
+		"confirmation text DEFAULT '"+
+			strings.ReplaceAll(defaultConfirmation, "'", "''")+"')",
+		1,
+	)
+	require.NotEqual(t, definition, defaultedDefinition)
+	_, err := db.ExecContext(t.Context(), defaultedDefinition)
+	require.NoError(t, err)
+
+	var (
+		sourceAfter     string
+		argumentDefault int
+	)
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT routine.prosrc, routine.pronargdefaults
+		   FROM pg_catalog.pg_proc AS routine
+		  WHERE routine.oid =
+		        'hytch_push_vault.activate_legacy_routing_retirement(text)'
+		            ::pg_catalog.regprocedure`,
+	).Scan(&sourceAfter, &argumentDefault))
+	require.Equal(t, sourceBefore, sourceAfter)
+	require.Equal(t, 1, argumentDefault)
 }
 
 func createRestrictedGateRole(t *testing.T, db *sql.DB) string {

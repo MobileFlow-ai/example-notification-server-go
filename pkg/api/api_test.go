@@ -820,7 +820,7 @@ func (b *secureMountBackend) AuthorizeWelcome(
 	return nil
 }
 
-func TestSecureRegistrationMountsWelcomeAuthorizationEndpoint(t *testing.T) {
+func TestSecureRegistrationWelcomeAuthorizationEndpointIsHardClosed(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -867,6 +867,6 @@ func TestSecureRegistrationMountsWelcomeAuthorizationEndpoint(t *testing.T) {
 	defer func() {
 		require.NoError(t, response.Body.Close())
 	}()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	require.Equal(t, 1, backend.welcomeCalls)
+	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+	require.Zero(t, backend.welcomeCalls)
 }

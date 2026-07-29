@@ -15,7 +15,11 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 	fixture, db := newSignedStoreFixture(t)
 	tombstoneTime := *fixture.now
 	conversation := testTopic(t, topicpkg.TopicKindGroupMessagesV1, 0x71)
-	welcome := testTopic(t, topicpkg.TopicKindWelcomeMessagesV1, 0x72)
+	stitchedConversation := testTopic(
+		t,
+		topicpkg.TopicKindGroupMessagesV1,
+		0x72,
+	)
 	control := fixture.policy(
 		t,
 		1,
@@ -38,11 +42,11 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 		),
 		fixture.subscription(
 			t,
-			welcome,
+			stitchedConversation,
 			0x74,
 			1,
 			688,
-			authority.PushModeSuppressed,
+			authority.PushModeAlertAllowed,
 			1,
 		),
 	)
@@ -51,7 +55,6 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 
 	var (
 		installationIdentity []byte
-		conversationIdentity []byte
 	)
 	require.NoError(
 		t,
@@ -61,18 +64,40 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 			   FROM hytch_push_vault.installation_states`,
 		).Scan(&installationIdentity),
 	)
+	conversationIdentity, err := fixture.store.routeHistoryIdentity(
+		fixture.installationID,
+		conversation.Bytes(),
+	)
+	require.NoError(t, err)
+	stitchedConversationIdentity, err := fixture.store.routeHistoryIdentity(
+		fixture.installationID,
+		stitchedConversation.Bytes(),
+	)
+	require.NoError(t, err)
+	require.NotEqual(t, conversationIdentity, stitchedConversationIdentity)
+	var (
+		conversationIdentityCount         int
+		stitchedConversationIdentityCount int
+	)
 	require.NoError(
 		t,
 		db.QueryRowContext(
 			t.Context(),
-			`SELECT route_identity
-			   FROM hytch_push_vault.subscription_leases
-			  WHERE topic_kind = $1`,
-			topicConversation,
-		).Scan(&conversationIdentity),
+			`SELECT COUNT(*) FILTER (WHERE route_identity = $1),
+			        COUNT(*) FILTER (WHERE route_identity = $2)
+			   FROM hytch_push_vault.subscription_leases`,
+			conversationIdentity,
+			stitchedConversationIdentity,
+		).Scan(
+			&conversationIdentityCount,
+			&stitchedConversationIdentityCount,
+		),
 	)
 	require.Len(t, installationIdentity, 32)
 	require.Len(t, conversationIdentity, 32)
+	require.Len(t, stitchedConversationIdentity, 32)
+	require.Equal(t, 1, conversationIdentityCount)
+	require.Equal(t, 1, stitchedConversationIdentityCount)
 	require.False(
 		t,
 		bytes.Contains(
@@ -109,23 +134,22 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 		t,
 		fixture.store.ReapplyDeletionTombstones(t.Context()),
 	)
-	var (
-		conversationCount int
-		welcomeCount      int
-	)
 	require.NoError(
 		t,
 		db.QueryRowContext(
 			t.Context(),
-			`SELECT COUNT(*) FILTER (WHERE topic_kind = $1),
-			        COUNT(*) FILTER (WHERE topic_kind = $2)
+			`SELECT COUNT(*) FILTER (WHERE route_identity = $1),
+			        COUNT(*) FILTER (WHERE route_identity = $2)
 			   FROM hytch_push_vault.subscription_leases`,
-			topicConversation,
-			topicWelcome,
-		).Scan(&conversationCount, &welcomeCount),
+			conversationIdentity,
+			stitchedConversationIdentity,
+		).Scan(
+			&conversationIdentityCount,
+			&stitchedConversationIdentityCount,
+		),
 	)
-	require.Zero(t, conversationCount)
-	require.Equal(t, 1, welcomeCount)
+	require.Zero(t, conversationIdentityCount)
+	require.Equal(t, 1, stitchedConversationIdentityCount)
 
 	tx, err = db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
@@ -157,6 +181,7 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 		fixture.store.ReapplyDeletionTombstones(t.Context()),
 	)
 	var installationCount int
+	var conversationCount int
 	require.NoError(
 		t,
 		db.QueryRowContext(
@@ -199,11 +224,11 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 			),
 			fixture.subscription(
 				t,
-				welcome,
+				stitchedConversation,
 				0x76,
 				1,
 				688,
-				authority.PushModeSuppressed,
+				authority.PushModeAlertAllowed,
 				2,
 			),
 		),
@@ -230,11 +255,11 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 			),
 			fixture.subscription(
 				t,
-				welcome,
+				stitchedConversation,
 				0x76,
 				2,
 				688,
-				authority.PushModeSuppressed,
+				authority.PushModeAlertAllowed,
 				2,
 			),
 		),
@@ -282,15 +307,13 @@ func TestTypedTombstoneReapplyIsInstallationAndRouteScoped(t *testing.T) {
 		t,
 		db.QueryRowContext(
 			t.Context(),
-			`SELECT COUNT(*) FILTER (WHERE topic_kind = $1),
-			        COUNT(*) FILTER (WHERE topic_kind = $2)
-			   FROM hytch_push_vault.subscription_leases`,
+			`SELECT COUNT(*)
+			   FROM hytch_push_vault.subscription_leases
+			  WHERE topic_kind = $1`,
 			topicConversation,
-			topicWelcome,
-		).Scan(&conversationCount, &welcomeCount),
+		).Scan(&conversationCount),
 	)
-	require.Equal(t, 1, conversationCount)
-	require.Equal(t, 1, welcomeCount)
+	require.Equal(t, 2, conversationCount)
 }
 
 func TestDeletionTombstoneFenceIsMonotonicAndBlocksStaleAdvance(

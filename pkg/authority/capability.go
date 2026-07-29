@@ -2,7 +2,6 @@ package authority
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,37 +35,32 @@ const (
 // encrypted wrapper. String encodings are deliberately explicit so the bridge
 // can verify an exact byte contract shared with modern-api and iOS.
 type ReceiveCapabilityV1 struct {
-	SchemaVersion            uint32 `json:"schema_version"`
-	Environment              string `json:"environment"`
-	InstallationID           string `json:"installation_id"`
-	AccountIncarnationID     string `json:"account_incarnation_id"`
-	PolicyEpoch              uint64 `json:"policy_epoch"`
-	TopicDigest              string `json:"topic_digest"`
-	AliasDay                 string `json:"alias_day"`
-	RouteAlias               string `json:"route_alias"`
-	ConversationGrantVersion uint64 `json:"conversation_grant_version"`
-	RosterVersion            uint64 `json:"roster_version"`
-	// ExpectedConversationCommitment is optional for an ordinary conversation
-	// route. A Welcome route requires a nonempty value that exactly matches its
-	// independently signed Welcome authorization.
-	ExpectedConversationCommitment string   `json:"expected_conversation_commitment"`
-	PushMode                       PushMode `json:"push_mode"`
-	IssuedAt                       string   `json:"issued_at"`
-	ExpiresAt                      string   `json:"expires_at"`
-	Nonce                          string   `json:"nonce"`
-	SigningKeyID                   string   `json:"signing_key_id"`
-	Algorithm                      string   `json:"algorithm"`
-	Signature                      string   `json:"signature"`
+	SchemaVersion            uint32   `json:"schema_version"`
+	Environment              string   `json:"environment"`
+	InstallationID           string   `json:"installation_id"`
+	AccountIncarnationID     string   `json:"account_incarnation_id"`
+	PolicyEpoch              uint64   `json:"policy_epoch"`
+	TopicDigest              string   `json:"topic_digest"`
+	AliasDay                 string   `json:"alias_day"`
+	RouteAlias               string   `json:"route_alias"`
+	ConversationGrantVersion uint64   `json:"conversation_grant_version"`
+	RosterVersion            uint64   `json:"roster_version"`
+	PushMode                 PushMode `json:"push_mode"`
+	IssuedAt                 string   `json:"issued_at"`
+	ExpiresAt                string   `json:"expires_at"`
+	Nonce                    string   `json:"nonce"`
+	SigningKeyID             string   `json:"signing_key_id"`
+	Algorithm                string   `json:"algorithm"`
+	Signature                string   `json:"signature"`
 }
 
 type VerifyOptions struct {
-	Now                            time.Time
-	MaxTTL                         time.Duration
-	ExpectedEnvironment            string
-	ExpectedInstallationID         string
-	ExpectedAccountIncarnationID   string
-	ExpectedTopicDigest            string
-	ExpectedConversationCommitment string
+	Now                          time.Time
+	MaxTTL                       time.Duration
+	ExpectedEnvironment          string
+	ExpectedInstallationID       string
+	ExpectedAccountIncarnationID string
+	ExpectedTopicDigest          string
 }
 
 // EffectivePushMode implements Gate 6's fail-closed rule: absent and unknown
@@ -84,45 +78,43 @@ func (c ReceiveCapabilityV1) EffectivePushMode() PushMode {
 // representation is the RFC 8785 representation for this deliberately narrow
 // schema.
 func (c ReceiveCapabilityV1) SigningBytes() ([]byte, error) {
-	if !validCapabilityCanonicalIntegers(c) {
+	if !validCapabilitySigningShape(c) {
 		return nil, ErrCapabilityInvalid
 	}
 	unsigned := struct {
-		AccountIncarnationID           string   `json:"account_incarnation_id"`
-		Algorithm                      string   `json:"algorithm"`
-		AliasDay                       string   `json:"alias_day"`
-		ConversationGrantVersion       uint64   `json:"conversation_grant_version"`
-		Environment                    string   `json:"environment"`
-		ExpectedConversationCommitment string   `json:"expected_conversation_commitment"`
-		ExpiresAt                      string   `json:"expires_at"`
-		InstallationID                 string   `json:"installation_id"`
-		IssuedAt                       string   `json:"issued_at"`
-		Nonce                          string   `json:"nonce"`
-		PolicyEpoch                    uint64   `json:"policy_epoch"`
-		PushMode                       PushMode `json:"push_mode"`
-		RosterVersion                  uint64   `json:"roster_version"`
-		RouteAlias                     string   `json:"route_alias"`
-		SchemaVersion                  uint32   `json:"schema_version"`
-		SigningKeyID                   string   `json:"signing_key_id"`
-		TopicDigest                    string   `json:"topic_digest"`
+		AccountIncarnationID     string   `json:"account_incarnation_id"`
+		Algorithm                string   `json:"algorithm"`
+		AliasDay                 string   `json:"alias_day"`
+		ConversationGrantVersion uint64   `json:"conversation_grant_version"`
+		Environment              string   `json:"environment"`
+		ExpiresAt                string   `json:"expires_at"`
+		InstallationID           string   `json:"installation_id"`
+		IssuedAt                 string   `json:"issued_at"`
+		Nonce                    string   `json:"nonce"`
+		PolicyEpoch              uint64   `json:"policy_epoch"`
+		PushMode                 PushMode `json:"push_mode"`
+		RosterVersion            uint64   `json:"roster_version"`
+		RouteAlias               string   `json:"route_alias"`
+		SchemaVersion            uint32   `json:"schema_version"`
+		SigningKeyID             string   `json:"signing_key_id"`
+		TopicDigest              string   `json:"topic_digest"`
 	}{
-		AccountIncarnationID:           c.AccountIncarnationID,
-		Algorithm:                      c.Algorithm,
-		AliasDay:                       c.AliasDay,
-		ConversationGrantVersion:       c.ConversationGrantVersion,
-		Environment:                    c.Environment,
-		ExpectedConversationCommitment: c.ExpectedConversationCommitment,
-		ExpiresAt:                      c.ExpiresAt,
-		InstallationID:                 c.InstallationID,
-		IssuedAt:                       c.IssuedAt,
-		Nonce:                          c.Nonce,
-		PolicyEpoch:                    c.PolicyEpoch,
-		PushMode:                       c.PushMode,
-		RosterVersion:                  c.RosterVersion,
-		RouteAlias:                     c.RouteAlias,
-		SchemaVersion:                  c.SchemaVersion,
-		SigningKeyID:                   c.SigningKeyID,
-		TopicDigest:                    c.TopicDigest,
+		AccountIncarnationID:     c.AccountIncarnationID,
+		Algorithm:                c.Algorithm,
+		AliasDay:                 c.AliasDay,
+		ConversationGrantVersion: c.ConversationGrantVersion,
+		Environment:              c.Environment,
+		ExpiresAt:                c.ExpiresAt,
+		InstallationID:           c.InstallationID,
+		IssuedAt:                 c.IssuedAt,
+		Nonce:                    c.Nonce,
+		PolicyEpoch:              c.PolicyEpoch,
+		PushMode:                 c.PushMode,
+		RosterVersion:            c.RosterVersion,
+		RouteAlias:               c.RouteAlias,
+		SchemaVersion:            c.SchemaVersion,
+		SigningKeyID:             c.SigningKeyID,
+		TopicDigest:              c.TopicDigest,
 	}
 	body, err := json.Marshal(unsigned)
 	if err != nil {
@@ -136,7 +128,13 @@ func VerifyReceiveCapability(
 	keys map[string]ed25519.PublicKey,
 	opts VerifyOptions,
 ) error {
-	if !validCapabilityShape(c) {
+	if !validCapabilityShape(c) ||
+		(opts.ExpectedEnvironment != "" &&
+			!ValidEnvironment(opts.ExpectedEnvironment)) ||
+		(opts.ExpectedInstallationID != "" &&
+			!ValidInstallationID(opts.ExpectedInstallationID)) ||
+		(opts.ExpectedAccountIncarnationID != "" &&
+			!ValidAccountIncarnationID(opts.ExpectedAccountIncarnationID)) {
 		return ErrCapabilityInvalid
 	}
 	if c.Algorithm != "Ed25519" {
@@ -146,8 +144,8 @@ func VerifyReceiveCapability(
 	if !ok || len(publicKey) != ed25519.PublicKeySize {
 		return ErrCapabilityKeyState
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(c.Signature)
-	if err != nil || len(signature) != ed25519.SignatureSize {
+	signature, canonical := decodeCanonicalRawURLBase64(c.Signature)
+	if !canonical || len(signature) != ed25519.SignatureSize {
 		return ErrCapabilityInvalid
 	}
 	signingBytes, err := c.SigningBytes()
@@ -191,10 +189,6 @@ func VerifyReceiveCapability(
 	if opts.ExpectedTopicDigest != "" && c.TopicDigest != opts.ExpectedTopicDigest {
 		return ErrCapabilityInvalid
 	}
-	if opts.ExpectedConversationCommitment != "" &&
-		c.ExpectedConversationCommitment != opts.ExpectedConversationCommitment {
-		return ErrCapabilityInvalid
-	}
 	return nil
 }
 
@@ -208,8 +202,8 @@ func ParsePublicKeyring(raw string) (map[string]ed25519.PublicKey, error) {
 		if !validASCIIField(keyID, 1, 64) {
 			return nil, ErrCapabilityKeyState
 		}
-		decoded, err := base64.RawURLEncoding.DecodeString(value)
-		if err != nil || len(decoded) != ed25519.PublicKeySize {
+		decoded, canonical := decodeCanonicalRawURLBase64(value)
+		if !canonical || len(decoded) != ed25519.PublicKeySize {
 			return nil, ErrCapabilityKeyState
 		}
 		out[keyID] = ed25519.PublicKey(decoded)
@@ -218,13 +212,21 @@ func ParsePublicKeyring(raw string) (map[string]ed25519.PublicKey, error) {
 }
 
 func validCapabilityShape(c ReceiveCapabilityV1) bool {
-	if !validCapabilityCanonicalIntegers(c) {
+	if !validCapabilitySigningShape(c) ||
+		!validASCIIField(c.Signature, 1, maxCapabilityFieldBytes) {
+		return false
+	}
+	return true
+}
+
+func validCapabilitySigningShape(c ReceiveCapabilityV1) bool {
+	if !validCapabilityCanonicalIntegers(c) ||
+		!ValidEnvironment(c.Environment) ||
+		!ValidInstallationID(c.InstallationID) ||
+		!ValidAccountIncarnationID(c.AccountIncarnationID) {
 		return false
 	}
 	fields := []string{
-		c.Environment,
-		c.InstallationID,
-		c.AccountIncarnationID,
 		c.TopicDigest,
 		c.AliasDay,
 		c.RouteAlias,
@@ -233,16 +235,11 @@ func validCapabilityShape(c ReceiveCapabilityV1) bool {
 		c.Nonce,
 		c.SigningKeyID,
 		c.Algorithm,
-		c.Signature,
 	}
 	for _, field := range fields {
 		if !validASCIIField(field, 1, maxCapabilityFieldBytes) {
 			return false
 		}
-	}
-	if c.ExpectedConversationCommitment != "" &&
-		!validLowerHexDigest(c.ExpectedConversationCommitment) {
-		return false
 	}
 	if c.PushMode != PushModeAlertAllowed && c.PushMode != PushModeSuppressed {
 		// Unknown modes are accepted only as a suppressed authority. They still
@@ -255,12 +252,12 @@ func validCapabilityShape(c ReceiveCapabilityV1) bool {
 	if err != nil || len(topicDigest) != 32 || hex.EncodeToString(topicDigest) != c.TopicDigest {
 		return false
 	}
-	routeAlias, err := base64.RawURLEncoding.DecodeString(c.RouteAlias)
-	if err != nil || len(routeAlias) != 16 {
+	routeAlias, canonical := decodeCanonicalRawURLBase64(c.RouteAlias)
+	if !canonical || len(routeAlias) != 16 {
 		return false
 	}
-	nonce, err := base64.RawURLEncoding.DecodeString(c.Nonce)
-	return err == nil && len(nonce) >= 16 && len(nonce) <= 64
+	nonce, canonical := decodeCanonicalRawURLBase64(c.Nonce)
+	return canonical && len(nonce) >= 16 && len(nonce) <= 64
 }
 
 func validCapabilityCanonicalIntegers(c ReceiveCapabilityV1) bool {
