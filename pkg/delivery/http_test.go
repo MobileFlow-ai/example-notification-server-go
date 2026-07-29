@@ -114,8 +114,23 @@ func TestHttpDelivery_ExhaustsAttempts(t *testing.T) {
 
 func TestHttpDelivery_ContextCancellation(t *testing.T) {
 	var requestCount int32
-	server, d := testServerAndDelivery(t, countingHandler(&requestCount, http.StatusInternalServerError), 5, 500)
+	retryDelay := time.Minute
+	server, d := testServerAndDelivery(
+		t,
+		countingHandler(&requestCount, http.StatusInternalServerError),
+		5,
+		int(retryDelay/time.Millisecond),
+	)
 	defer server.Close()
+
+	waitStarted := make(chan time.Duration, 1)
+	d.waitForRetry = func(
+		ctx context.Context,
+		delay time.Duration,
+	) error {
+		waitStarted <- delay
+		return waitForRetryDelay(ctx, delay)
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, ctx, newTestRequest())
@@ -125,11 +140,20 @@ func TestHttpDelivery_ContextCancellation(t *testing.T) {
 		done <- d.Send(authorizedContext, authorizedRequest)
 	}()
 
-	// Wait for first attempt to complete, then cancel
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case delay := <-waitStarted:
+		require.Equal(t, retryDelay, delay)
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not enter retry wait")
+	}
 	cancel()
 
-	err := <-done
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not stop after context cancellation")
+	}
 	require.Error(t, err)
 	require.Equal(t, context.Canceled, err)
 	// Should have made only 1 request before context was cancelled during backoff
@@ -148,28 +172,37 @@ func TestHttpDelivery_DefaultConfig(t *testing.T) {
 }
 
 func TestHttpDelivery_ExponentialBackoff(t *testing.T) {
-	var timestamps []time.Time
-	server, d := testServerAndDelivery(t, func(w http.ResponseWriter, r *http.Request) {
-		timestamps = append(timestamps, time.Now())
-		w.WriteHeader(http.StatusInternalServerError)
-	}, 4, 50)
+	var requestCount int32
+	server, d := testServerAndDelivery(
+		t,
+		countingHandler(&requestCount, http.StatusInternalServerError),
+		4,
+		50,
+	)
 	defer server.Close()
 
-	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
-	_ = d.Send(authorizedContext, authorizedRequest)
-
-	// Should have 4 requests total (maxAttempts=4)
-	require.Len(t, timestamps, 4)
-
-	// Verify delays roughly double each time
-	// Expected delays: 50ms, 100ms, 200ms
-	for i := 1; i < len(timestamps); i++ {
-		gap := timestamps[i].Sub(timestamps[i-1])
-		expectedDelay := time.Duration(50*(1<<uint(i-1))) * time.Millisecond
-		// Allow 30ms tolerance for test timing
-		require.InDelta(t, expectedDelay.Milliseconds(), gap.Milliseconds(), 30,
-			"gap between request %d and %d should be ~%v, got %v", i-1, i, expectedDelay, gap)
+	var delays []time.Duration
+	d.waitForRetry = func(
+		ctx context.Context,
+		delay time.Duration,
+	) error {
+		require.NoError(t, ctx.Err())
+		delays = append(delays, delay)
+		return nil
 	}
+
+	authorizedContext, authorizedRequest := authorizeTestDeliveryRequest(t, t.Context(), newTestRequest())
+	require.Error(t, d.Send(authorizedContext, authorizedRequest))
+	require.Equal(t, int32(4), atomic.LoadInt32(&requestCount))
+	require.Equal(
+		t,
+		[]time.Duration{
+			50 * time.Millisecond,
+			100 * time.Millisecond,
+			200 * time.Millisecond,
+		},
+		delays,
+	)
 }
 
 func TestHttpDelivery_SingleAttempt(t *testing.T) {

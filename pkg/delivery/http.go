@@ -19,6 +19,7 @@ type HttpDelivery struct {
 	authHeader        string
 	maxAttempts       int
 	initialRetryDelay time.Duration
+	waitForRetry      func(context.Context, time.Duration) error
 }
 
 func NewHttpDelivery(_ *zap.Logger, opts options.HttpDeliveryOptions) *HttpDelivery {
@@ -32,6 +33,7 @@ func NewHttpDelivery(_ *zap.Logger, opts options.HttpDeliveryOptions) *HttpDeliv
 		authHeader:        opts.AuthHeader,
 		maxAttempts:       maxAttempts,
 		initialRetryDelay: time.Duration(opts.InitialRetryDelayMs) * time.Millisecond,
+		waitForRetry:      waitForRetryDelay,
 	}
 }
 
@@ -59,16 +61,28 @@ func (h HttpDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 
 		if attempt < h.maxAttempts-1 {
 			delay := h.initialRetryDelay * (1 << uint(attempt))
-			select {
-			case <-time.After(delay):
-				// continue to next attempt
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := h.waitForRetry(ctx, delay); err != nil {
+				return err
 			}
 		}
 	}
 
 	return lastErr
+}
+
+func waitForRetryDelay(
+	ctx context.Context,
+	delay time.Duration,
+) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (h HttpDelivery) doSend(ctx context.Context, jsonData []byte) error {
