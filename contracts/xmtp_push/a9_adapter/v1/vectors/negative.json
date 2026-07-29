@@ -1,0 +1,704 @@
+{
+  "contract": "hytch.xmtp-push.a9-adapter.v1",
+  "rule": "Every vector is terminal. INVALID, STALE, REVOKED, and INCONCLUSIVE always produce zero egress; none maps to valid zero.",
+  "vectors": [
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "BAD_SIGNATURE",
+        "terminal": "INVALID"
+      },
+      "id": "assertion_signature_one_byte",
+      "mutation": {
+        "op": "replace",
+        "path": "/signature_base64url",
+        "value": "XFROGJMNkwqhFsXAUDDl2tYmcwda_iyRq81_GM87O7ON9s70Q2akOy9drJSi1b34qJPm_w5YpLy3hbRD8CeoBw"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "BAD_SIGNATURE",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_signature_domain",
+      "mutation": {
+        "verification_domain_utf8": "Hytch A9 bridge control v1\u0000"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "FIELD_DOMAIN",
+        "terminal": "INVALID"
+      },
+      "id": "assertion_unsigned_one_byte",
+      "mutation": {
+        "op": "replace",
+        "path": "/state",
+        "value": "REVOKED"
+      }
+    },
+    {
+      "base": "raw",
+      "expected": {
+        "reason": "DUPLICATE_KEY",
+        "terminal": "INVALID"
+      },
+      "id": "duplicate_json_key",
+      "mutation": {
+        "raw_utf8": "{\"protocol\":\"hytch.a9-bridge-assertion\",\"protocol\":\"hytch.a9-bridge-assertion\"}"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "UNKNOWN_FIELD_RAW_ROSTER_FORBIDDEN",
+        "terminal": "INVALID"
+      },
+      "id": "unknown_assertion_field",
+      "mutation": {
+        "op": "add",
+        "path": "/roster_digest",
+        "value": "ABImhe2OV0_3QdZ9fY950azHS8AkvJUC0AbkmqqEsts"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "NONCANONICAL_BASE64URL",
+        "terminal": "INVALID"
+      },
+      "id": "padded_signature",
+      "mutation": {
+        "op": "replace",
+        "path": "/signature_base64url",
+        "value": "XVROGJMNkwqhFsXAUDDl2tYmcwda_iyRq81_GM87O7ON9s70Q2akOy9drJSi1b34qJPm_w5YpLy3hbRD8CeoBw=="
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "NONCANONICAL_BASE64URL",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_length_base64url",
+      "mutation": {
+        "op": "replace",
+        "path": "/binding_id",
+        "value": "EBESExQVFhcYGRobHB0eH"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "FIELD_DOMAIN",
+        "terminal": "INVALID"
+      },
+      "id": "noncanonical_uuid",
+      "mutation": {
+        "op": "replace",
+        "path": "/account_incarnation_id",
+        "value": "2BF32592-A919-43B3-9360-D1FD360DF82A"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "FIELD_DOMAIN",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_environment_spelling",
+      "mutation": {
+        "op": "replace",
+        "path": "/environment",
+        "value": "development"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "WRONG_AUDIENCE",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_audience",
+      "mutation": {
+        "op": "replace",
+        "path": "/audience",
+        "value": "hytch.xmtp-push-bridge.welcome"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "WELCOME_CLOSED",
+        "terminal": "INVALID"
+      },
+      "id": "welcome_purpose",
+      "mutation": {
+        "op": "replace",
+        "path": "/purpose",
+        "value": "welcome_push"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "NONCANONICAL_TIME",
+        "terminal": "INVALID"
+      },
+      "id": "noncanonical_timestamp",
+      "mutation": {
+        "op": "replace",
+        "path": "/issued_at",
+        "value": "2026-07-29T17:00:00Z"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "NON_IJSON_NUMBER",
+        "terminal": "INVALID"
+      },
+      "id": "integer_as_float",
+      "mutation": {
+        "op": "replace",
+        "path": "/binding_version",
+        "value": 4.0
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "INTEGER_RANGE",
+        "terminal": "INVALID"
+      },
+      "id": "integer_overflow",
+      "mutation": {
+        "op": "replace",
+        "path": "/stream_sequence",
+        "value": 9007199254740992
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "TOPIC_BINDING_MISMATCH",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_topic_binding",
+      "mutation": {
+        "op": "replace",
+        "path": "/topic_binding",
+        "value": "EksMkfc1wRyB-AewxRK3vXR7rAHl-5HbO6WyPQDWQ6Q"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "ROSTER_COMMITMENT_MISMATCH",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_roster_commitment",
+      "mutation": {
+        "op": "replace",
+        "path": "/roster_commitment",
+        "value": "gQVF6qLLKd3sbXcv2ZJGCubdgPMSb07S8a8gK_oqKk4"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "TUPLE_COMMITMENT_MISMATCH",
+        "terminal": "INVALID"
+      },
+      "id": "wrong_tuple_commitment",
+      "mutation": {
+        "op": "replace",
+        "path": "/tuple_commitment",
+        "value": "X0nLnTWwEJUmo0MvREVyYbwbv4-Y6WDqN8faPH0ZlUI"
+      }
+    },
+    {
+      "base": "positive.source_tuple + positive.assertion.value",
+      "expected": {
+        "reason": "TUPLE_COMMITMENT_MISMATCH",
+        "terminal": "INVALID"
+      },
+      "id": "tuple_source_account_mutation",
+      "mutation": {
+        "op": "replace",
+        "path": "/source_tuple/account_incarnation_id",
+        "value": "2bf32592-a919-43b3-9360-d1fd360df82b"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "TOPIC_KEY_EPOCH",
+        "terminal": "INVALID"
+      },
+      "id": "stale_topic_key_epoch",
+      "mutation": {
+        "op": "replace",
+        "path": "/topic_key_epoch",
+        "value": 686
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "KEY_STATE",
+        "terminal": "INVALID"
+      },
+      "id": "unknown_signer",
+      "mutation": {
+        "op": "replace",
+        "path": "/signing_key_id",
+        "value": "ed25519-sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "base": "positive.online_signer_rotation.transition_keyset.value",
+      "expected": {
+        "reason": "KEY_STATE",
+        "terminal": "INVALID"
+      },
+      "id": "signer_not_yet_valid",
+      "mutation": {
+        "evaluation_time": "2026-07-29T17:00:00.000Z",
+        "signing_key_id": "ed25519-sha256:49cd4a722f870206fcf268a069025c2b59685513cde84c06d744a7ba0a499e71"
+      }
+    },
+    {
+      "base": "positive.online_signer_rotation.cutover_keyset.value",
+      "expected": {
+        "reason": "KEY_STATE",
+        "terminal": "INVALID"
+      },
+      "id": "signer_expired",
+      "mutation": {
+        "evaluation_time": "2026-07-30T17:01:30.000Z",
+        "signing_key_id": "ed25519-sha256:c945cbf2a5602002141e2fb9d17054d6ca069951df73f49d1f8aca87f9878f60"
+      }
+    },
+    {
+      "base": "positive.assertion.value",
+      "expected": {
+        "reason": "EXPIRED",
+        "terminal": "INVALID"
+      },
+      "id": "expired_assertion",
+      "mutation": {
+        "evaluation_time": "2026-07-29T17:00:30.000Z"
+      }
+    },
+    {
+      "base": "positive.control_upsert.value",
+      "expected": {
+        "reason": "FIELD_DOMAIN",
+        "terminal": "INVALID"
+      },
+      "id": "control_upsert_shape_mismatch",
+      "mutation": {
+        "op": "replace",
+        "path": "/reason_code",
+        "value": "authority_revoked"
+      }
+    },
+    {
+      "base": "positive.control_upsert.value",
+      "expected": {
+        "reason": "CONTROL_GAP",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "control_gap_upsert",
+      "mutation": {
+        "bridge_applied_sequence": 5
+      }
+    },
+    {
+      "base": "positive.control_upsert.value",
+      "expected": {
+        "reason": "CONTROL_SEQUENCE_REGRESSION",
+        "terminal": "STALE"
+      },
+      "id": "control_sequence_regression",
+      "mutation": {
+        "bridge_applied_sequence": 8
+      }
+    },
+    {
+      "base": "positive.control_upsert.value",
+      "expected": {
+        "reason": "DENY_APPLIES_AND_UNCERTAINTY_LATCHES",
+        "terminal": "REVOKED"
+      },
+      "id": "revoke_across_gap",
+      "mutation": {
+        "action": "REVOKE",
+        "assertion": null,
+        "bridge_applied_sequence": 2,
+        "reason_code": "authority_revoked"
+      }
+    },
+    {
+      "base": "positive.control_upsert.value",
+      "expected": {
+        "reason": "IDEMPOTENCY_CONFLICT",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "idempotency_key_different_body",
+      "mutation": {
+        "body_changed": true,
+        "same_idempotency_key": true
+      }
+    },
+    {
+      "base": "positive.control_upsert.value",
+      "expected": {
+        "reason": "TOMBSTONE_WINS",
+        "terminal": "REVOKED"
+      },
+      "id": "upsert_after_tombstone",
+      "mutation": {
+        "binding_tombstoned": true
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "TOMBSTONE_WINS",
+        "terminal": "REVOKED"
+      },
+      "id": "revoke_refresh_race",
+      "mutation": {
+        "concurrent_revoke": {
+          "assertion_hash": "a89B0pG7B5gtU9L3f996TnuyiJKoiekIY8YlSemgdYI",
+          "binding_id": "EBESExQVFhcYGRobHB0eHw",
+          "binding_version": 4,
+          "stream_sequence": 8
+        }
+      }
+    },
+    {
+      "base": "positive.watermark_current.value",
+      "expected": {
+        "reason": "WATERMARK_EXPIRED",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "watermark_expired",
+      "mutation": {
+        "evaluation_time": "2026-07-29T17:00:30.000Z"
+      }
+    },
+    {
+      "base": "positive.watermark_current.value",
+      "expected": {
+        "reason": "WATERMARK_GAP",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "watermark_max_seen_with_gap",
+      "mutation": {
+        "applied_sequences": [
+          1,
+          2,
+          4,
+          5,
+          6,
+          7
+        ],
+        "committed_through_stream_sequence": 7
+      }
+    },
+    {
+      "base": "positive.watermark_current.value",
+      "expected": {
+        "reason": "WATERMARK_ROLLBACK",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "watermark_sequence_rollback",
+      "mutation": {
+        "stored_watermark_sequence": 42
+      }
+    },
+    {
+      "base": "positive.watermark_current.value",
+      "expected": {
+        "reason": "SOURCE_UNAVAILABLE",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "watermark_uncertain",
+      "mutation": {
+        "status": "UNCERTAIN",
+        "uncertainty_reason": "SOURCE_UNAVAILABLE"
+      }
+    },
+    {
+      "base": "positive.watermark_current.value",
+      "expected": {
+        "reason": "EPOCH_MISMATCH",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "sequencer_epoch_change",
+      "mutation": {
+        "sequencer_epoch": "Pz49PDs6OTg3NjU0MzIxMA"
+      }
+    },
+    {
+      "base": "bridge_state",
+      "expected": {
+        "reason": "REPLICA_AMBIGUITY",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "restart_ambiguity",
+      "mutation": {
+        "durable_applied_cursor_available": false
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "INSTALLATION_MISMATCH",
+        "terminal": "INVALID"
+      },
+      "id": "cross_installation_assertion",
+      "mutation": {
+        "op": "replace",
+        "path": "/installation_binding_id",
+        "value": "AQIDBAUGBwgJCgsMDQ4PEA"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "ASSERTION_HASH_MISMATCH",
+        "terminal": "INVALID"
+      },
+      "id": "cross_topic_assertion_hash",
+      "mutation": {
+        "op": "replace",
+        "path": "/subscriptions/0/assertion_hash",
+        "value": "as9B0pG7B5gtU9L3f996TnuyiJKoiekIY8YlSemgdYI"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "TOPIC_RESOLVER",
+        "terminal": "INVALID"
+      },
+      "id": "noncanonical_transport_id_uppercase",
+      "mutation": {
+        "op": "replace",
+        "path": "/subscriptions/0/transport_conversation_id",
+        "value": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "TOPIC_RESOLVER",
+        "terminal": "INVALID"
+      },
+      "id": "topic_wrong_length",
+      "mutation": {
+        "op": "replace",
+        "path": "/subscriptions/0/topic_base64url",
+        "value": "AAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "TOPIC_RESOLVER",
+        "terminal": "INVALID"
+      },
+      "id": "transport_topic_mismatch",
+      "mutation": {
+        "op": "replace",
+        "path": "/subscriptions/0/transport_conversation_id",
+        "value": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e10"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "WELCOME_CLOSED",
+        "terminal": "INVALID"
+      },
+      "id": "welcome_topic_kind",
+      "mutation": {
+        "op": "replace",
+        "path": "/subscriptions/0/topic_base64url",
+        "value": "AQABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "HMAC_PERIOD_DUPLICATE",
+        "terminal": "INVALID"
+      },
+      "id": "sender_hmac_period_duplicate",
+      "mutation": {
+        "duplicate_hmac_period": true
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "DUPLICATE_SUBSCRIPTION",
+        "terminal": "INVALID"
+      },
+      "id": "duplicate_subscription",
+      "mutation": {
+        "op": "add",
+        "path": "/subscriptions/1",
+        "value": {
+          "assertion_hash": "a89B0pG7B5gtU9L3f996TnuyiJKoiekIY8YlSemgdYI",
+          "binding_id": "EBESExQVFhcYGRobHB0eHw",
+          "binding_version": 4,
+          "hmac_keys": [
+            {
+              "key_base64url": "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY",
+              "thirty_day_periods_since_epoch": 688
+            },
+            {
+              "key_base64url": "JygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0BBQkNERUY",
+              "thirty_day_periods_since_epoch": 689
+            }
+          ],
+          "receive_capability_base64url": "eyJmaXh0dXJlX29ubHkiOnRydWUsImdhdGUiOjYsInZlcmRpY3QiOiJWQUxJRCJ9",
+          "route_key_base64url": "wcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3-A",
+          "route_key_epoch": 5,
+          "topic_base64url": "AAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f",
+          "topic_binding": "E0sMkfc1wRyB-AewxRK3vXR7rAHl-5HbO6WyPQDWQ6Q",
+          "topic_key_epoch": 688,
+          "transport_conversation_id": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        }
+      }
+    },
+    {
+      "base": "individually-valid positive subscriptions ordered by decoded topic_binding",
+      "expected": {
+        "reason": "SUBSCRIPTION_ORDER",
+        "terminal": "INVALID"
+      },
+      "id": "unsorted_subscriptions",
+      "mutation": {
+        "op": "reverse",
+        "path": "/subscriptions",
+        "submitted_topic_binding_order": [
+          "X0gxiybdqEF1ebTXFHzdJ14k6W5rr32-6xp5lo9Xoow",
+          "E0sMkfc1wRyB-AewxRK3vXR7rAHl-5HbO6WyPQDWQ6Q"
+        ]
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "ROUTE_KEY_EPOCH",
+        "terminal": "STALE"
+      },
+      "id": "route_key_epoch_rollback",
+      "mutation": {
+        "stored_route_key_epoch": 6
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "ATOMIC_ROLLBACK_NO_CHANGE",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "partial_cas_failure",
+      "mutation": {
+        "fail_after_validating_entry": 0
+      }
+    },
+    {
+      "base": "positive.subscription_replace.value",
+      "expected": {
+        "reason": "VAULT_COMMIT_AMBIGUOUS",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "vault_commit_ambiguous",
+      "mutation": {
+        "vault_commit_outcome": "AMBIGUOUS"
+      }
+    },
+    {
+      "base": "positive.service_jwt",
+      "expected": {
+        "reason": "SERVICE_AUTH",
+        "terminal": "INVALID"
+      },
+      "id": "jwt_wrong_audience",
+      "mutation": {
+        "op": "replace",
+        "path": "/claims/aud",
+        "value": "hytch.xmtp-push-bridge.welcome"
+      }
+    },
+    {
+      "base": "positive.service_jwt",
+      "expected": {
+        "reason": "SERVICE_AUTH",
+        "terminal": "INVALID"
+      },
+      "id": "jwt_wrong_path",
+      "mutation": {
+        "op": "replace",
+        "path": "/claims/path",
+        "value": "/internal/v1/xmtp-push/welcomes:authorize"
+      }
+    },
+    {
+      "base": "positive.service_jwt",
+      "expected": {
+        "reason": "SERVICE_AUTH",
+        "terminal": "INVALID"
+      },
+      "id": "jwt_wrong_body_hash",
+      "mutation": {
+        "op": "replace",
+        "path": "/claims/request_sha256",
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "base": "positive.service_jwt",
+      "expected": {
+        "reason": "SERVICE_AUTH_REPLAY",
+        "terminal": "INVALID"
+      },
+      "id": "jwt_reused_jti",
+      "mutation": {
+        "jti_already_consumed": "a47ef0b2-f1ec-4fd1-bff2-12f0fe80c8f1"
+      }
+    },
+    {
+      "base": "positive.keyset.value",
+      "expected": {
+        "reason": "KEYSET_ROLLBACK",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "keyset_sequence_rollback",
+      "mutation": {
+        "stored_keyset_sequence": 18
+      }
+    },
+    {
+      "base": "positive.pre_egress",
+      "expected": {
+        "reason": "GATE6_DENY",
+        "terminal": "INCONCLUSIVE"
+      },
+      "id": "gate6_independent_deny",
+      "mutation": {
+        "gate6_independent_fixture_verdict": "DENY"
+      }
+    }
+  ]
+}
