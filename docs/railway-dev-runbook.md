@@ -628,7 +628,6 @@ export/import and destructive restore rehearsal remain manual and
    golangci-lint version | rg -q 'version 2\.9\.0([[:space:]]|$)'
    golangci-lint run --timeout=5m --config dev/.golangci.yaml
    ./dev/lint-shellcheck
-   shellcheck dev/railway-legacy-retirement-preflight
    buf lint proto
    buf breaking proto \
      --against 'https://github.com/xmtp/example-notification-server-go.git#branch=main,subdir=proto'
@@ -640,8 +639,8 @@ export/import and destructive restore rehearsal remain manual and
    ```
 
    Use exactly `golangci-lint` v2.9.0, matching the checked-in workflow.
-   `./dev/lint-shellcheck` discovers only tracked files, so keep the explicit
-   wrapper check until `dev/railway-legacy-retirement-preflight` is tracked.
+   `./dev/lint-shellcheck` discovers tracked shell files, including
+   `dev/railway-legacy-retirement-preflight`.
    Confirm the active Buildx builder reports both `linux/amd64` and
    `linux/arm64`; cross-platform builds require working QEMU/binfmt support
    where the Docker runtime does not provide it.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -88,6 +89,46 @@ func TestRandomizedAggregatePromotionFailsClosed(t *testing.T) {
 	promote, err := randomizedAggregatePromotion(1, errorReader{})
 	require.Error(t, err)
 	require.False(t, promote)
+}
+
+func TestRevocationLatencyBucketBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		bucket   int16
+	}{
+		{name: "negative", duration: -time.Nanosecond, bucket: 0},
+		{name: "zero", duration: 0, bucket: 0},
+		{name: "positive", duration: time.Nanosecond, bucket: 1},
+		{name: "thirty seconds", duration: 30 * time.Second, bucket: 1},
+		{
+			name:     "over thirty seconds",
+			duration: 30*time.Second + time.Nanosecond,
+			bucket:   2,
+		},
+		{name: "one minute", duration: time.Minute, bucket: 2},
+		{
+			name:     "over one minute",
+			duration: time.Minute + time.Nanosecond,
+			bucket:   3,
+		},
+		{name: "two minutes", duration: 2 * time.Minute, bucket: 3},
+		{
+			name:     "over two minutes",
+			duration: 2*time.Minute + time.Nanosecond,
+			bucket:   4,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				test.bucket,
+				revocationLatencyBucket(test.duration),
+			)
+		})
+	}
 }
 
 type errorReader struct{}
