@@ -1,4 +1,4 @@
-package crypto
+package a9trust
 
 import (
 	"crypto/hmac"

@@ -1,4 +1,4 @@
-package crypto
+package a9trust
 
 import (
 	"crypto/ed25519"
@@ -268,7 +268,11 @@ func ValidateAssertion(object map[string]any, expected AssertionExpectations) Ve
 	if !expires.After(issued) || expires.Sub(issued) > 30*time.Second {
 		return Invalid("FIELD_DOMAIN")
 	}
-	if !expected.EvaluationTime.IsZero() && !expected.EvaluationTime.Before(expires) {
+	evaluationTime := expected.EvaluationTime.UTC()
+	if expected.EvaluationTime.IsZero() || evaluationTime.Before(issued) {
+		return Inconclusive("CLOCK_UNCERTAIN")
+	}
+	if !evaluationTime.Before(expires) {
 		return Invalid("EXPIRED")
 	}
 	if expected.InstallationBindingID != "" &&
@@ -302,7 +306,107 @@ func ValidateAssertion(object map[string]any, expected AssertionExpectations) Ve
 	if !verdict.IsEligible() {
 		return verdict
 	}
-	return VerifyObject(object, "signature_base64url", AssertionSignatureDomain, publicKey)
+	if verdict = VerifyObject(
+		object,
+		"signature_base64url",
+		AssertionSignatureDomain,
+		publicKey,
+	); !verdict.IsEligible() {
+		return verdict
+	}
+
+	if _, verdict = commitmentKeyByIDForWindow(
+		expected.Keyset,
+		"ROSTER",
+		objectString(object, "roster_commitment_key_id"),
+		nil,
+		issued,
+		evaluationTime,
+		expires,
+	); !verdict.IsEligible() {
+		return verdict
+	}
+	if _, verdict = commitmentKeyByIDForWindow(
+		expected.Keyset,
+		"TUPLE",
+		objectString(object, "tuple_commitment_key_id"),
+		nil,
+		issued,
+		evaluationTime,
+		expires,
+	); !verdict.IsEligible() {
+		return verdict
+	}
+	epoch := uint32(topicEpoch)
+	if _, verdict = commitmentKeyForWindow(
+		expected.Keyset,
+		"TOPIC",
+		&epoch,
+		issued,
+		evaluationTime,
+		expires,
+	); !verdict.IsEligible() {
+		return verdict
+	}
+	return Eligible()
+}
+
+func commitmentKeyByIDForWindow(
+	keyset map[string]any,
+	purpose string,
+	keyID string,
+	topicEpoch *uint32,
+	issued time.Time,
+	evaluationTime time.Time,
+	expires time.Time,
+) (CommitmentKey, Verdict) {
+	key, verdict := commitmentKeyByIDAt(
+		keyset,
+		purpose,
+		keyID,
+		topicEpoch,
+		issued,
+	)
+	if !verdict.IsEligible() ||
+		!commitmentKeyCoversWindow(key, issued, evaluationTime, expires) {
+		return CommitmentKey{}, Inconclusive("KEY_STATE")
+	}
+	return key, Eligible()
+}
+
+func commitmentKeyForWindow(
+	keyset map[string]any,
+	purpose string,
+	topicEpoch *uint32,
+	issued time.Time,
+	evaluationTime time.Time,
+	expires time.Time,
+) (CommitmentKey, Verdict) {
+	key, verdict := CommitmentKeyAt(
+		keyset,
+		purpose,
+		topicEpoch,
+		issued,
+		true,
+	)
+	if !verdict.IsEligible() ||
+		!commitmentKeyCoversWindow(key, issued, evaluationTime, expires) {
+		return CommitmentKey{}, Inconclusive("KEY_STATE")
+	}
+	return key, Eligible()
+}
+
+func commitmentKeyCoversWindow(
+	key CommitmentKey,
+	issued time.Time,
+	evaluationTime time.Time,
+	expires time.Time,
+) bool {
+	return !issued.Before(key.NotBefore) &&
+		issued.Before(key.NotAfter) &&
+		!evaluationTime.Before(key.NotBefore) &&
+		evaluationTime.Before(key.NotAfter) &&
+		!key.NotAfter.Before(expires)
 }
 
 func objectString(object map[string]any, field string) string {

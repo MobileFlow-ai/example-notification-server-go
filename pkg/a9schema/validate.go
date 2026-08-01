@@ -1,4 +1,4 @@
-package schema
+package a9schema
 
 import (
 	"encoding/base64"
@@ -471,7 +471,7 @@ func validateSubscriptionsReplace(value any, path string) error {
 	if err != nil {
 		return err
 	}
-	if err := uniqueItems(
+	if err := uniqueCanonicalItems(
 		subscriptions,
 		objectPath(path, "subscriptions"),
 		ReasonDuplicateSubscription,
@@ -856,6 +856,26 @@ func uniqueItems(values []any, path string, reason Reason) error {
 				return failure(reason, arrayPath(path, left))
 			}
 		}
+	}
+	return nil
+}
+
+// uniqueCanonicalItems preserves exact JSON-value equality without the
+// quadratic pairwise scan used for the keyset's small fixed arrays. Values
+// originate from Parse, so json.Marshal provides a deterministic, injective
+// encoding for the supported null/bool/string/integer/array/object domain.
+func uniqueCanonicalItems(values []any, path string, reason Reason) error {
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		canonical, err := json.Marshal(value)
+		if err != nil {
+			return failure(ReasonFieldDomain, arrayPath(path, index))
+		}
+		key := string(canonical)
+		if _, duplicate := seen[key]; duplicate {
+			return failure(reason, arrayPath(path, index))
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }

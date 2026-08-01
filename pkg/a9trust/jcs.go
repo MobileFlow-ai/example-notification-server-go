@@ -1,7 +1,7 @@
-// Package crypto independently reproduces the cryptographic transcripts in the
-// mirrored A9 adapter contract.  It intentionally depends only on the Go
-// standard library.
-package crypto
+// Package a9trust implements the exact cryptographic transcripts, key
+// validation, and canonical encodings in the production A9 v1 adapter. It
+// intentionally depends only on the Go standard library.
+package a9trust
 
 import (
 	"bytes"
