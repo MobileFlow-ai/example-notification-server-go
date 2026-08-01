@@ -62,6 +62,7 @@ type routeRow struct {
 	encryptedNonceState       []byte
 	agePolicy                 int16
 	installationPolicyEpoch   uint64
+	installationExpiresAt     time.Time
 	installationControlExpiry time.Time
 }
 
@@ -98,8 +99,16 @@ func (s *Store) getSubscriptionsOnce(
 	requestedTopic *topicpkg.Topic,
 	thirtyDayPeriod int,
 ) ([]interfaces.Subscription, error) {
-	if requestedTopic == nil || thirtyDayPeriod < 0 {
+	if s == nil || s.db == nil || requestedTopic == nil ||
+		thirtyDayPeriod < 0 {
 		return nil, ErrRefreshInvalid
+	}
+	if s.a9Enabled {
+		return s.getSubscriptionsA9Once(
+			ctx,
+			requestedTopic,
+			thirtyDayPeriod,
+		)
 	}
 	if err := s.RequireRetentionSafe(ctx); err != nil {
 		return nil, ErrStoreUnavailable
@@ -208,6 +217,12 @@ func (s *Store) getSubscriptionsOnce(
 	}
 
 	subscriptions := make([]interfaces.Subscription, 0, len(rowsByLease))
+	committed := false
+	defer func() {
+		if !committed {
+			wipeA9PreparedSubscriptions(subscriptions)
+		}
+	}()
 	for _, row := range rowsByLease {
 		subscription, ok, routeErr := s.prepareRoute(
 			ctx,
@@ -227,6 +242,7 @@ func (s *Store) getSubscriptionsOnce(
 	if err = tx.Commit(); err != nil {
 		return nil, storeDatabaseError(err)
 	}
+	committed = true
 	return subscriptions, nil
 }
 
@@ -264,6 +280,24 @@ func (s *Store) prepareRoute(
 		zero(routeKey)
 		return interfaces.Subscription{}, false, ErrStoreUnavailable
 	}
+	var (
+		exactKey        *interfaces.HmacKey
+		capabilityBytes []byte
+		routeAlias      []byte
+	)
+	preparedForReturn := false
+	defer func() {
+		if preparedForReturn {
+			return
+		}
+		zero(routeKey)
+		if exactKey != nil {
+			zero(exactKey.Key)
+			exactKey = nil
+		}
+		zero(capabilityBytes)
+		zero(routeAlias)
+	}()
 	hmacBytes, err := s.encryption.Open(
 		leaseContext(row.leaseID, "hmac-keys"),
 		row.encryptedHMACKeys,
@@ -274,11 +308,11 @@ func (s *Store) prepareRoute(
 	}
 	defer zero(hmacBytes)
 	var hmacKeys []HMACKeyInput
+	defer func() { wipeHMACKeyInputs(hmacKeys) }()
 	if err = json.Unmarshal(hmacBytes, &hmacKeys); err != nil {
 		zero(routeKey)
 		return interfaces.Subscription{}, false, ErrStoreUnavailable
 	}
-	var exactKey *interfaces.HmacKey
 	for _, candidate := range hmacKeys {
 		if int(candidate.ThirtyDayPeriodsSinceEpoch) == thirtyDayPeriod &&
 			len(candidate.Key) == 32 {
@@ -294,7 +328,7 @@ func (s *Store) prepareRoute(
 		return interfaces.Subscription{}, false, nil
 	}
 
-	capabilityBytes, err := s.encryption.Open(
+	capabilityBytes, err = s.encryption.Open(
 		leaseContext(row.leaseID, "capability"),
 		row.encryptedCapability,
 	)
@@ -344,7 +378,7 @@ func (s *Store) prepareRoute(
 		zero(capabilityBytes)
 		return interfaces.Subscription{}, false, nil
 	}
-	routeAlias, err := base64.RawURLEncoding.DecodeString(
+	routeAlias, err = base64.RawURLEncoding.DecodeString(
 		capability.RouteAlias,
 	)
 	if err != nil || len(routeAlias) != gate8wrapper.RouteAliasSize {
@@ -422,6 +456,7 @@ func (s *Store) prepareRoute(
 		return interfaces.Subscription{}, false, ErrStoreUnavailable
 	}
 	expectedPeriod := thirtyDayPeriod
+	preparedForReturn = true
 	return interfaces.Subscription{
 		CreatedAt:             row.refreshedAt,
 		InstallationId:        base64.RawURLEncoding.EncodeToString(row.leaseID),
@@ -445,6 +480,14 @@ func (s *Store) prepareRoute(
 			PolicyEpoch:       row.policyEpoch,
 		},
 	}, true, nil
+}
+
+func wipeHMACKeyInputs(keys []HMACKeyInput) {
+	for index := range keys {
+		zero(keys[index].Key)
+		keys[index].Key = nil
+	}
+	clear(keys)
 }
 
 func (s *Store) GetInstallations(

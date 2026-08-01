@@ -20,6 +20,7 @@ func TestSerializationFailuresAreTheOnlyRetriedDatabaseErrors(t *testing.T) {
 }
 
 func TestStoreDatabaseErrorPreservesOnlyRetryableConflicts(t *testing.T) {
+	require.NoError(t, storeDatabaseError(nil))
 	retryable := testSQLStateError("40001")
 	require.ErrorIs(t, storeDatabaseError(retryable), retryable)
 	require.ErrorIs(

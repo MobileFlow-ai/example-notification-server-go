@@ -12,7 +12,9 @@ import (
 	"io"
 	"time"
 
+	"github.com/xmtp/example-notification-server-go/pkg/a9trust"
 	"github.com/xmtp/example-notification-server-go/pkg/gate8wrapper"
+	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 )
 
 const (
@@ -45,6 +47,7 @@ var (
 type SerializedDeliveryJob struct {
 	DeviceToken            string               `json:"device_token"`
 	Topic                  string               `json:"topic"`
+	ProviderTopic          []byte               `json:"provider_topic,omitempty"`
 	Payload                []byte               `json:"payload"`
 	PushType               string               `json:"push_type"`
 	Priority               int                  `json:"priority"`
@@ -56,9 +59,10 @@ type SerializedDeliveryJob struct {
 	DeliverySequence       uint64               `json:"delivery_sequence"`
 	AliasDay               string               `json:"alias_day"`
 	RouteAlias             []byte               `json:"route_alias"`
-	WelcomeAuthorizationID []byte               `json:"welcome_authorization_id,omitempty"`
-	WelcomeEnvelopeDigest  []byte               `json:"welcome_envelope_digest,omitempty"`
-	EraseOnly              bool                 `json:"erase_only,omitempty"`
+	WelcomeAuthorizationID []byte                      `json:"welcome_authorization_id,omitempty"`
+	WelcomeEnvelopeDigest  []byte                      `json:"welcome_envelope_digest,omitempty"`
+	A9                     *interfaces.A9RouteSnapshot `json:"a9,omitempty"`
+	EraseOnly              bool                        `json:"erase_only,omitempty"`
 }
 
 type DeliveryTrafficClass uint8
@@ -90,6 +94,126 @@ type ClaimedDeliveryJob struct {
 	Attempts           int
 	RetryExponent      int
 	ExpiresAt          time.Time
+}
+
+type a9DeliverySnapshotRow struct {
+	installationBindingID  []byte
+	sequencerEpoch         []byte
+	subscriptionGeneration sql.NullInt64
+	bindingID               []byte
+	bindingVersion          sql.NullInt64
+	assertionHash           []byte
+	assertionStreamSequence sql.NullInt64
+	topicKeyEpoch           sql.NullInt64
+	topicBinding            []byte
+	routeKeyEpoch           sql.NullInt64
+	keysetSequence          sql.NullInt64
+	keysetHash              []byte
+	watermarkSequence       sql.NullInt64
+}
+
+func (row *a9DeliverySnapshotRow) scanDestinations() []any {
+	return []any{
+		&row.installationBindingID,
+		&row.sequencerEpoch,
+		&row.subscriptionGeneration,
+		&row.bindingID,
+		&row.bindingVersion,
+		&row.assertionHash,
+		&row.assertionStreamSequence,
+		&row.topicKeyEpoch,
+		&row.topicBinding,
+		&row.routeKeyEpoch,
+		&row.keysetSequence,
+		&row.keysetHash,
+		&row.watermarkSequence,
+	}
+}
+
+func (row a9DeliverySnapshotRow) empty() bool {
+	return len(row.installationBindingID) == 0 &&
+		len(row.sequencerEpoch) == 0 &&
+		!row.subscriptionGeneration.Valid &&
+		len(row.bindingID) == 0 &&
+		!row.bindingVersion.Valid &&
+		len(row.assertionHash) == 0 &&
+		!row.assertionStreamSequence.Valid &&
+		!row.topicKeyEpoch.Valid &&
+		len(row.topicBinding) == 0 &&
+		!row.routeKeyEpoch.Valid &&
+		!row.keysetSequence.Valid &&
+		len(row.keysetHash) == 0 &&
+		!row.watermarkSequence.Valid
+}
+
+func (row a9DeliverySnapshotRow) complete() bool {
+	return len(row.installationBindingID) == 16 &&
+		len(row.sequencerEpoch) == 16 &&
+		row.subscriptionGeneration.Valid &&
+		row.subscriptionGeneration.Int64 > 0 &&
+		uint64(row.subscriptionGeneration.Int64) <= a9MaxSafeInteger &&
+		len(row.bindingID) == 16 &&
+		row.bindingVersion.Valid &&
+		row.bindingVersion.Int64 > 0 &&
+		uint64(row.bindingVersion.Int64) <= a9MaxSafeInteger &&
+		len(row.assertionHash) == 32 &&
+		row.assertionStreamSequence.Valid &&
+		row.assertionStreamSequence.Int64 > 0 &&
+		uint64(row.assertionStreamSequence.Int64) <= a9MaxSafeInteger &&
+		row.topicKeyEpoch.Valid &&
+		row.topicKeyEpoch.Int64 > 0 &&
+		uint64(row.topicKeyEpoch.Int64) <= uint64(^uint32(0)) &&
+		len(row.topicBinding) == 32 &&
+		row.routeKeyEpoch.Valid &&
+		row.routeKeyEpoch.Int64 > 0 &&
+		uint64(row.routeKeyEpoch.Int64) <= uint64(^uint32(0)) &&
+		row.keysetSequence.Valid &&
+		row.keysetSequence.Int64 > 0 &&
+		uint64(row.keysetSequence.Int64) <= a9MaxSafeInteger &&
+		len(row.keysetHash) == 32 &&
+		row.watermarkSequence.Valid &&
+		row.watermarkSequence.Int64 > 0 &&
+		uint64(row.watermarkSequence.Int64) <= a9MaxSafeInteger
+}
+
+func (row a9DeliverySnapshotRow) matches(
+	snapshot *interfaces.A9RouteSnapshot,
+) bool {
+	return snapshot != nil &&
+		row.complete() &&
+		subtle.ConstantTimeCompare(
+			row.installationBindingID,
+			snapshot.InstallationBindingID[:],
+		) == 1 &&
+		subtle.ConstantTimeCompare(
+			row.sequencerEpoch,
+			snapshot.SequencerEpoch[:],
+		) == 1 &&
+		uint64(row.subscriptionGeneration.Int64) ==
+			snapshot.SubscriptionGeneration &&
+		subtle.ConstantTimeCompare(
+			row.bindingID,
+			snapshot.BindingID[:],
+		) == 1 &&
+		uint64(row.bindingVersion.Int64) == snapshot.BindingVersion &&
+		subtle.ConstantTimeCompare(
+			row.assertionHash,
+			snapshot.AssertionHash[:],
+		) == 1 &&
+		uint64(row.assertionStreamSequence.Int64) ==
+			snapshot.AssertionStreamSequence &&
+		uint64(row.topicKeyEpoch.Int64) == uint64(snapshot.TopicKeyEpoch) &&
+		subtle.ConstantTimeCompare(
+			row.topicBinding,
+			snapshot.TopicBinding[:],
+		) == 1 &&
+		uint64(row.routeKeyEpoch.Int64) == uint64(snapshot.RouteKeyEpoch) &&
+		uint64(row.keysetSequence.Int64) == snapshot.KeysetSequence &&
+		subtle.ConstantTimeCompare(
+			row.keysetHash,
+			snapshot.KeysetHash[:],
+		) == 1 &&
+		uint64(row.watermarkSequence.Int64) == snapshot.WatermarkSequence
 }
 
 type DeliveryAttemptOutcome uint8
@@ -235,15 +359,40 @@ func (s *Store) enqueueDeliveryJobOnce(
 		len(sourceEventID) > 512 || maxQueued <= 0 {
 		return nil, ErrDeliveryJobInvalid
 	}
+	now := s.now().UTC()
+	if err := validateSerializedDeliveryJob(job, now); err != nil {
+		return nil, err
+	}
+	if s.a9Enabled != (job.A9 != nil) {
+		return nil, ErrDeliveryJobInvalid
+	}
 	if err := s.RequireRetentionSafe(ctx); err != nil {
 		return nil, ErrDeliveryQueueUnavailable
 	}
 	if err := s.RecoverDeliveryJobs(ctx); err != nil {
 		return nil, ErrDeliveryQueueUnavailable
 	}
-	now := s.now().UTC()
-	if err := validateSerializedDeliveryJob(job, now); err != nil {
-		return nil, err
+	var topicBindingLease a9trust.TopicBindingLease
+	if s.a9Enabled {
+		if s.a9Trust == nil {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+		var acquireErr error
+		topicBindingLease, acquireErr =
+			s.a9Trust.AcquireTopicBindingLease(
+				ctx,
+				now,
+				job.A9.KeysetSequence,
+				job.A9.KeysetHash,
+			)
+		if acquireErr != nil || topicBindingLease == nil {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+		defer func() {
+			if topicBindingLease != nil {
+				topicBindingLease.Close()
+			}
+		}()
 	}
 	expiresAt := job.Expiration.UTC()
 	if maximum := now.Add(maxDeliveryJobLifetime); expiresAt.After(maximum) {
@@ -260,7 +409,42 @@ func (s *Store) enqueueDeliveryJobOnce(
 		return nil, deliveryQueueDatabaseError(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err = s.requireRetentionSafeTx(ctx, tx); err != nil {
+	var currentA9Route a9CurrentRouteState
+	if s.a9Enabled {
+		var current bool
+		currentA9Route, current, err = s.requireA9CurrentRouteTx(
+			ctx,
+			tx,
+			leaseID,
+			job.A9,
+		)
+		if err != nil {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+		if !current {
+			return nil, ErrDeliveryJobInvalid
+		}
+		if !a9TrustClockAligned(now, currentA9Route.databaseNow) {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+		recomputed, verdict := topicBindingLease.TopicBindingForEpoch(
+			ctx,
+			job.ProviderTopic,
+			job.A9.TopicKeyEpoch,
+			now,
+			job.A9.AssertionExpiresAt,
+			true,
+		)
+		if !verdict.IsEligible() ||
+			!a9trust.EqualBinding(recomputed, job.A9.TopicBinding[:]) {
+			clear(recomputed)
+			return nil, ErrDeliveryJobInvalid
+		}
+		clear(recomputed)
+		topicBindingLease.Close()
+		topicBindingLease = nil
+		defer zero(currentA9Route.installationIdentity)
+	} else if err = s.requireRetentionSafeTx(ctx, tx); err != nil {
 		return nil, ErrDeliveryQueueUnavailable
 	}
 	if _, err = tx.ExecContext(
@@ -293,7 +477,9 @@ func (s *Store) enqueueDeliveryJobOnce(
 		currentRouteKeyEpoch  int64
 		currentPolicyEpoch    int64
 		encryptedNonceState   []byte
+		encryptedTopic        []byte
 		installationLookup    []byte
+		installationIdentity  []byte
 		encryptedCurrentToken []byte
 	)
 	err = tx.QueryRowContext(
@@ -307,7 +493,9 @@ func (s *Store) enqueueDeliveryJobOnce(
 		 leases.route_key_epoch,
 		 leases.policy_epoch,
 		 leases.encrypted_nonce_state,
+		 leases.encrypted_topic,
 		 leases.installation_lookup,
+		 leases.installation_identity,
 		 states.encrypted_apns_token
 		   FROM hytch_push_vault.subscription_leases AS leases
 		   JOIN hytch_push_vault.installation_states AS states
@@ -333,7 +521,9 @@ func (s *Store) enqueueDeliveryJobOnce(
 		&currentRouteKeyEpoch,
 		&currentPolicyEpoch,
 		&encryptedNonceState,
+		&encryptedTopic,
 		&installationLookup,
+		&installationIdentity,
 		&encryptedCurrentToken,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -357,11 +547,46 @@ func (s *Store) enqueueDeliveryJobOnce(
 	if !authorityMatches {
 		return nil, ErrDeliveryJobInvalid
 	}
+	if s.a9Enabled &&
+		subtle.ConstantTimeCompare(
+			installationIdentity,
+			currentA9Route.installationIdentity,
+		) != 1 {
+		return nil, ErrDeliveryJobInvalid
+	}
+	if s.a9Enabled {
+		currentTopic, openErr := s.encryption.Open(
+			leaseContext(leaseID, "topic"),
+			encryptedTopic,
+		)
+		if openErr != nil {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+		topicMatches := subtle.ConstantTimeCompare(
+			currentTopic,
+			job.ProviderTopic,
+		) == 1
+		zero(currentTopic)
+		if !topicMatches {
+			return nil, ErrDeliveryJobInvalid
+		}
+	}
 	if authorityExpiresAt.UTC().Before(expiresAt) {
 		expiresAt = authorityExpiresAt.UTC()
 		job.Expiration = expiresAt
 	}
-	if !expiresAt.After(now) {
+	if s.a9Enabled {
+		a9ExpiresAt := currentA9Route.authorityExpiresAt()
+		if a9ExpiresAt.Before(expiresAt) {
+			expiresAt = a9ExpiresAt
+			job.Expiration = expiresAt
+		}
+	}
+	expiryReference := now
+	if s.a9Enabled && currentA9Route.databaseNow.After(expiryReference) {
+		expiryReference = currentA9Route.databaseNow
+	}
+	if !expiresAt.After(expiryReference) {
 		return nil, ErrDeliveryJobInvalid
 	}
 	sourceEventLookup, err := s.deliverySourceEventLookup(
@@ -466,14 +691,76 @@ func (s *Store) enqueueDeliveryJobOnce(
 		)
 		return nil, ErrDeliveryQueueFull
 	}
+	if s.a9Enabled {
+		var finalDatabaseNow time.Time
+		if err = tx.QueryRowContext(
+			ctx,
+			`SELECT pg_catalog.clock_timestamp()`,
+		).Scan(&finalDatabaseNow); err != nil {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+		reference, stillCurrent := a9RouteStillCurrentAt(
+			now,
+			s.now().UTC(),
+			finalDatabaseNow.UTC(),
+			currentA9Route,
+			job.A9,
+		)
+		if !stillCurrent ||
+			!reference.Before(expiresAt) ||
+			!reference.Before(authorityExpiresAt.UTC()) {
+			return nil, ErrDeliveryQueueUnavailable
+		}
+	}
 	queueBucket := deliveryQueueUtilizationBucket(queued+1, maxQueued)
+	var (
+		a9InstallationBindingID  any
+		a9SequencerEpoch         any
+		a9SubscriptionGeneration any
+		a9BindingID               any
+		a9BindingVersion          any
+		a9AssertionHash           any
+		a9AssertionStreamSequence any
+		a9TopicKeyEpoch           any
+		a9TopicBinding            any
+		a9RouteKeyEpoch           any
+		a9KeysetSequence          any
+		a9KeysetHash              any
+		a9WatermarkSequence       any
+	)
+	if job.A9 != nil {
+		a9InstallationBindingID = job.A9.InstallationBindingID[:]
+		a9SequencerEpoch = job.A9.SequencerEpoch[:]
+		a9SubscriptionGeneration = int64(job.A9.SubscriptionGeneration)
+		a9BindingID = job.A9.BindingID[:]
+		a9BindingVersion = int64(job.A9.BindingVersion)
+		a9AssertionHash = job.A9.AssertionHash[:]
+		a9AssertionStreamSequence = int64(
+			job.A9.AssertionStreamSequence,
+		)
+		a9TopicKeyEpoch = int64(job.A9.TopicKeyEpoch)
+		a9TopicBinding = job.A9.TopicBinding[:]
+		a9RouteKeyEpoch = int64(job.A9.RouteKeyEpoch)
+		a9KeysetSequence = int64(job.A9.KeysetSequence)
+		a9KeysetHash = job.A9.KeysetHash[:]
+		a9WatermarkSequence = int64(job.A9.WatermarkSequence)
+	}
 	if _, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO hytch_push_vault.delivery_jobs (
 			     job_id, lease_id, encrypted_job, environment,
 			     state, attempts, available_at, expires_at, created_at,
-			     traffic_class
-			 ) VALUES ($1,$2,$3,$4,$5,0,$6,$7,$6,$8)`,
+			     traffic_class, a9_installation_binding_id,
+			     a9_sequencer_epoch, a9_subscription_generation,
+			     a9_binding_id, a9_binding_version, a9_assertion_hash,
+			     a9_assertion_stream_sequence, a9_topic_key_epoch,
+			     a9_topic_binding, a9_route_key_epoch,
+			     a9_keyset_sequence, a9_keyset_hash,
+			     a9_watermark_sequence
+			 ) VALUES (
+			     $1,$2,$3,$4,$5,0,$6,$7,$6,$8,$9,$10,$11,$12,$13,
+			     $14,$15,$16,$17,$18,$19,$20,$21
+			 )`,
 		jobID,
 		leaseID,
 		encrypted,
@@ -482,6 +769,19 @@ func (s *Store) enqueueDeliveryJobOnce(
 		now,
 		expiresAt,
 		int16(job.TrafficClass),
+		a9InstallationBindingID,
+		a9SequencerEpoch,
+		a9SubscriptionGeneration,
+		a9BindingID,
+		a9BindingVersion,
+		a9AssertionHash,
+		a9AssertionStreamSequence,
+		a9TopicKeyEpoch,
+		a9TopicBinding,
+		a9RouteKeyEpoch,
+		a9KeysetSequence,
+		a9KeysetHash,
+		a9WatermarkSequence,
 	); err != nil {
 		return nil, deliveryQueueDatabaseError(err)
 	}
@@ -662,7 +962,20 @@ func (s *Store) markDeliveryJobFinalTx(
 		        retry_exponent = 0,
 		        available_at = $3,
 		        traffic_class = $4,
-		        final_reason = $5
+		        final_reason = $5,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 		  WHERE job_id = $6
 		    AND state IN ($7, $8)
 		    AND environment = $9`,
@@ -704,7 +1017,20 @@ func (s *Store) markDeliveryJobsSafetyForLeaseTx(
 		        retry_exponent = 0,
 		        available_at = $3,
 		        traffic_class = COALESCE(traffic_class, $4),
-		        final_reason = $5
+		        final_reason = $5,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 		  WHERE lease_id = $6
 		    AND state IN ($7, $8)
 		    AND environment = $9`,
@@ -743,7 +1069,20 @@ func (s *Store) markDeliveryJobsSafetyForInstallationTx(
 		        retry_exponent = 0,
 		        available_at = $3,
 		        traffic_class = COALESCE(jobs.traffic_class, $4),
-		        final_reason = $5
+		        final_reason = $5,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 		   FROM hytch_push_vault.subscription_leases AS leases
 		  WHERE jobs.lease_id = leases.lease_id
 		    AND leases.installation_lookup = $6
@@ -791,7 +1130,20 @@ func (s *Store) markExpiredDeliveryJobsTx(
 		        final_reason = CASE
 		          WHEN traffic_class IN ($5, $6) THEN $7::SMALLINT
 		          ELSE $8::SMALLINT
-		        END
+		        END,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 		  WHERE state IN ($9, $10)
 		    AND expires_at <= $3
 		    AND environment = $11`,
@@ -1240,7 +1592,20 @@ func (s *Store) ClaimDeliveryJobs(
 	rows, err := tx.QueryContext(
 		ctx,
 		`SELECT jobs.job_id, jobs.lease_id, jobs.encrypted_job,
-		        jobs.attempts, jobs.expires_at, jobs.traffic_class
+		        jobs.attempts, jobs.expires_at, jobs.traffic_class,
+		        jobs.a9_installation_binding_id,
+		        jobs.a9_sequencer_epoch,
+		        jobs.a9_subscription_generation,
+		        jobs.a9_binding_id,
+		        jobs.a9_binding_version,
+		        jobs.a9_assertion_hash,
+		        jobs.a9_assertion_stream_sequence,
+		        jobs.a9_topic_key_epoch,
+		        jobs.a9_topic_binding,
+		        jobs.a9_route_key_epoch,
+		        jobs.a9_keyset_sequence,
+		        jobs.a9_keyset_hash,
+		        jobs.a9_watermark_sequence
 		   FROM hytch_push_vault.delivery_jobs AS jobs
 		   JOIN hytch_push_vault.subscription_leases AS leases
 		     ON leases.lease_id = jobs.lease_id
@@ -1285,18 +1650,24 @@ func (s *Store) ClaimDeliveryJobs(
 		attempts  int16
 		expiresAt time.Time
 		traffic   sql.NullInt16
+		a9        a9DeliverySnapshotRow
 	}
 	var encryptedRows []encryptedJobRow
 	for rows.Next() {
 		var row encryptedJobRow
-		if err = rows.Scan(
-			&row.jobID,
-			&row.leaseID,
-			&row.encrypted,
-			&row.attempts,
-			&row.expiresAt,
-			&row.traffic,
-		); err != nil {
+			destinations := []any{
+				&row.jobID,
+				&row.leaseID,
+				&row.encrypted,
+				&row.attempts,
+				&row.expiresAt,
+				&row.traffic,
+			}
+			destinations = append(
+				destinations,
+				row.a9.scanDestinations()...,
+			)
+			if err = rows.Scan(destinations...); err != nil {
 			_ = rows.Close()
 			return nil, ErrDeliveryQueueUnavailable
 		}
@@ -1326,14 +1697,20 @@ func (s *Store) ClaimDeliveryJobs(
 			}
 			continue
 		}
-		var job SerializedDeliveryJob
-		decodeErr := json.Unmarshal(plaintext, &job)
-		zero(plaintext)
-		if decodeErr != nil ||
-			validateSerializedDeliveryJob(job, now) != nil ||
-			!job.Expiration.UTC().Equal(row.expiresAt.UTC()) ||
-			(row.traffic.Valid &&
-				row.traffic.Int16 != int16(job.TrafficClass)) {
+			var job SerializedDeliveryJob
+			decodeErr := json.Unmarshal(plaintext, &job)
+			zero(plaintext)
+			a9ShapeValid := row.a9.empty() || row.a9.complete()
+			a9ModeMatches := s.a9Enabled == row.a9.complete()
+			a9SnapshotMatches := (row.a9.empty() && job.A9 == nil) ||
+				row.a9.matches(job.A9)
+			if decodeErr != nil ||
+				validateSerializedDeliveryJob(job, now) != nil ||
+				!job.Expiration.UTC().Equal(row.expiresAt.UTC()) ||
+				!a9ShapeValid ||
+				!a9SnapshotMatches ||
+				(row.traffic.Valid &&
+					row.traffic.Int16 != int16(job.TrafficClass)) {
 			if _, err = s.markDeliveryJobFinalTx(
 				ctx,
 				tx,
@@ -1341,9 +1718,20 @@ func (s *Store) ClaimDeliveryJobs(
 				DeliveryFinalMaterialInvalid,
 			); err != nil {
 				return nil, ErrDeliveryQueueUnavailable
+				}
+				continue
 			}
-			continue
-		}
+			if !a9ModeMatches {
+				if _, err = s.markDeliveryJobFinalTx(
+					ctx,
+					tx,
+					row.jobID,
+					DeliveryFinalSafetyInvalidated,
+				); err != nil {
+					return nil, ErrDeliveryQueueUnavailable
+				}
+				continue
+			}
 		if _, err = tx.ExecContext(
 			ctx,
 			`UPDATE hytch_push_vault.delivery_jobs
@@ -1515,7 +1903,20 @@ func (g *deliveryAttemptGuard) markFinal(
 		        retry_exponent = 0,
 		        available_at = $4,
 		        traffic_class = $5,
-		        final_reason = $6
+		        final_reason = $6,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 		  WHERE job_id = $7
 		    AND state = $8
 		    AND attempts = $9
@@ -1611,7 +2012,20 @@ func (g *deliveryAttemptGuard) convertInvalidTokenTx(
 		        state = $3,
 		        attempts = 0,
 		        retry_exponent = 0,
-		        available_at = $4
+		        available_at = $4,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 			  WHERE job_id = $5
 			    AND state = $6
 			    AND attempts = $7
@@ -1702,11 +2116,16 @@ func (s *Store) AcquireDeliveryAttempt(
 	ctx context.Context,
 	job ClaimedDeliveryJob,
 ) (DeliveryAttemptGuard, bool, error) {
-	if s == nil || s.db == nil || s.encryption == nil ||
-		len(job.JobID) != 16 ||
+	if s == nil || s.db == nil || s.encryption == nil {
+		return nil, false, ErrDeliveryJobInvalid
+	}
+	now := s.now().UTC()
+	if len(job.JobID) != 16 ||
 		len(job.LeaseID) != 16 ||
 		job.Attempts <= 0 || job.Attempts > MaxDeliveryAttempts ||
-		validateSerializedDeliveryJob(job.Job, s.now().UTC()) != nil {
+		validateSerializedDeliveryJob(job.Job, now) != nil ||
+		!job.ExpiresAt.UTC().Equal(job.Job.Expiration.UTC()) ||
+		s.a9Enabled != (job.Job.A9 != nil) {
 		return nil, false, ErrDeliveryJobInvalid
 	}
 	var expectedTopicKind int16
@@ -1727,7 +2146,28 @@ func (s *Store) AcquireDeliveryAttempt(
 	default:
 		return nil, false, ErrDeliveryJobInvalid
 	}
-	now := s.now().UTC()
+	var topicBindingLease a9trust.TopicBindingLease
+	if s.a9Enabled {
+		if s.a9Trust == nil {
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		var acquireErr error
+		topicBindingLease, acquireErr =
+			s.a9Trust.AcquireTopicBindingLease(
+				ctx,
+				now,
+				job.Job.A9.KeysetSequence,
+				job.Job.A9.KeysetHash,
+			)
+		if acquireErr != nil || topicBindingLease == nil {
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		defer func() {
+			if topicBindingLease != nil {
+				topicBindingLease.Close()
+			}
+		}()
+	}
 	tx, err := s.db.BeginTx(
 		ctx,
 		&sql.TxOptions{Isolation: sql.LevelReadCommitted},
@@ -1751,43 +2191,197 @@ func (s *Store) AcquireDeliveryAttempt(
 		_ = guard.Release()
 		return nil, false, ErrDeliveryQueueUnavailable
 	}
-	if err = s.requireRetentionSafeTx(ctx, tx); err != nil {
+	var currentA9Route a9CurrentRouteState
+	if s.a9Enabled {
+		var current bool
+		currentA9Route, current, err = s.requireA9CurrentRouteTx(
+			ctx,
+			tx,
+			job.LeaseID,
+			job.Job.A9,
+		)
+		if err != nil {
+			_ = guard.Release()
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		if !current {
+			_ = guard.Release()
+			return nil, false, nil
+		}
+		if !a9TrustClockAligned(now, currentA9Route.databaseNow) {
+			_ = guard.Release()
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		defer zero(currentA9Route.installationIdentity)
+		recomputed, verdict := topicBindingLease.TopicBindingForEpoch(
+			ctx,
+			job.Job.ProviderTopic,
+			job.Job.A9.TopicKeyEpoch,
+			now,
+			job.Job.A9.AssertionExpiresAt,
+			true,
+		)
+		topicMatches := verdict.IsEligible() &&
+			a9trust.EqualBinding(
+				recomputed,
+				job.Job.A9.TopicBinding[:],
+			)
+		clear(recomputed)
+		if !topicMatches {
+			_ = guard.Release()
+			if !verdict.IsEligible() &&
+				verdict.Terminal == "INCONCLUSIVE" {
+				return nil, false, ErrDeliveryQueueUnavailable
+			}
+			return nil, false, nil
+		}
+		topicBindingLease.Close()
+		topicBindingLease = nil
+	} else if err = s.requireRetentionSafeTx(ctx, tx); err != nil {
 		_ = guard.Release()
 		return nil, false, ErrDeliveryQueueUnavailable
 	}
+
+	var persistedJobExpiresAt time.Time
+	if s.a9Enabled {
+		var persistedA9 a9DeliverySnapshotRow
+		err = tx.QueryRowContext(
+			ctx,
+			`SELECT expires_at,
+			        a9_installation_binding_id,
+			        a9_sequencer_epoch,
+			        a9_subscription_generation,
+			        a9_binding_id,
+			        a9_binding_version,
+			        a9_assertion_hash,
+			        a9_assertion_stream_sequence,
+			        a9_topic_key_epoch,
+			        a9_topic_binding,
+			        a9_route_key_epoch,
+			        a9_keyset_sequence,
+			        a9_keyset_hash,
+			        a9_watermark_sequence
+			   FROM hytch_push_vault.delivery_jobs
+			  WHERE job_id = $1
+			    AND lease_id = $2
+			    AND state = $3
+			    AND attempts = $4
+			    AND expires_at > $5
+			    AND environment = $6
+			  FOR UPDATE`,
+			job.JobID,
+			job.LeaseID,
+			deliveryJobClaimed,
+			job.Attempts-1,
+			a9DeliveryReferenceTime(now, currentA9Route, true),
+			s.environmentID,
+		).Scan(append(
+			[]any{&persistedJobExpiresAt},
+			persistedA9.scanDestinations()...,
+		)...)
+		if errors.Is(err, sql.ErrNoRows) {
+			_ = guard.Release()
+			return nil, false, nil
+		}
+		if err != nil {
+			_ = guard.Release()
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		if !persistedJobExpiresAt.UTC().Equal(job.ExpiresAt.UTC()) ||
+			!persistedA9.matches(job.Job.A9) {
+			_ = guard.Release()
+			return nil, false, nil
+		}
+	}
 	var (
+		authorityExpiresAt    time.Time
 		currentRouteKeyEpoch  int64
 		currentPolicyEpoch    int64
 		encryptedNonceState   []byte
+		encryptedTopic        []byte
 		installationLookup    []byte
+		installationIdentity  []byte
 		encryptedCurrentToken []byte
 		currentAgePolicy      int16
 	)
-	err = tx.QueryRowContext(
-		ctx,
-		`SELECT leases.route_key_epoch,
-		        leases.policy_epoch,
-		        leases.encrypted_nonce_state,
-		        leases.installation_lookup,
-		        states.encrypted_apns_token,
-		        states.age_policy
-		   FROM hytch_push_vault.delivery_jobs AS jobs
-		   JOIN hytch_push_vault.subscription_leases AS leases
-		     ON leases.lease_id = jobs.lease_id
-		   JOIN hytch_push_vault.installation_states AS states
-		     ON states.installation_lookup = leases.installation_lookup
-		  WHERE jobs.job_id = $1
-		    AND jobs.lease_id = $2
-		    AND jobs.state = $3
-		    AND jobs.attempts = $4
-		    AND jobs.expires_at > $5
-		    AND leases.expires_at > $5
-		    AND leases.control_expires_at > $5
-		    AND states.expires_at > $5
-		    AND states.control_expires_at > $5
-		    AND states.state = $6
-		    AND states.encrypted_apns_token IS NOT NULL
-		    AND states.policy_epoch = leases.policy_epoch
+	var authorityRow *sql.Row
+	if s.a9Enabled {
+		authorityRow = tx.QueryRowContext(
+			ctx,
+			`SELECT LEAST(
+			        leases.expires_at,
+			        leases.control_expires_at,
+			        states.expires_at,
+			        states.control_expires_at
+			     ),
+			        leases.route_key_epoch,
+			        leases.policy_epoch,
+			        leases.encrypted_nonce_state,
+			        leases.encrypted_topic,
+			        leases.installation_lookup,
+			        leases.installation_identity,
+			        states.encrypted_apns_token,
+			        states.age_policy
+			   FROM hytch_push_vault.subscription_leases AS leases
+			   JOIN hytch_push_vault.installation_states AS states
+			     ON states.installation_lookup = leases.installation_lookup
+			  WHERE leases.lease_id = $1
+			    AND leases.expires_at > $2
+			    AND leases.control_expires_at > $2
+			    AND states.expires_at > $2
+			    AND states.control_expires_at > $2
+			    AND states.state = $3
+			    AND states.encrypted_apns_token IS NOT NULL
+			    AND states.policy_epoch = leases.policy_epoch
+			    AND leases.state = $4
+			    AND leases.topic_kind = $5
+			    AND leases.push_mode = $6
+			    AND leases.environment = $7
+			    AND states.environment = $7
+			  FOR SHARE OF leases, states`,
+			job.LeaseID,
+			a9DeliveryReferenceTime(now, currentA9Route, true),
+			stateActive,
+			expectedLeaseState,
+			expectedTopicKind,
+			expectedPushMode,
+			s.environmentID,
+		)
+	} else {
+		authorityRow = tx.QueryRowContext(
+			ctx,
+			`SELECT LEAST(
+			        leases.expires_at,
+			        leases.control_expires_at,
+			        states.expires_at,
+			        states.control_expires_at
+			     ),
+			        leases.route_key_epoch,
+			        leases.policy_epoch,
+			        leases.encrypted_nonce_state,
+			        leases.encrypted_topic,
+			        leases.installation_lookup,
+			        leases.installation_identity,
+			        states.encrypted_apns_token,
+			        states.age_policy
+			   FROM hytch_push_vault.delivery_jobs AS jobs
+			   JOIN hytch_push_vault.subscription_leases AS leases
+			     ON leases.lease_id = jobs.lease_id
+			   JOIN hytch_push_vault.installation_states AS states
+			     ON states.installation_lookup = leases.installation_lookup
+			  WHERE jobs.job_id = $1
+			    AND jobs.lease_id = $2
+			    AND jobs.state = $3
+			    AND jobs.attempts = $4
+			    AND jobs.expires_at > $5
+			    AND jobs.a9_installation_binding_id IS NULL
+			    AND leases.expires_at > $5
+			    AND leases.control_expires_at > $5
+			    AND states.expires_at > $5
+			    AND states.control_expires_at > $5
+			    AND states.state = $6
+			    AND states.encrypted_apns_token IS NOT NULL
+			    AND states.policy_epoch = leases.policy_epoch
 			    AND leases.state = $7
 			    AND leases.topic_kind = $8
 			    AND leases.push_mode = $9
@@ -1796,21 +2390,26 @@ func (s *Store) AcquireDeliveryAttempt(
 			    AND states.environment = $10
 			  FOR UPDATE OF jobs
 			  FOR SHARE OF leases, states`,
-		job.JobID,
-		job.LeaseID,
-		deliveryJobClaimed,
-		job.Attempts-1,
-		now,
-		stateActive,
-		expectedLeaseState,
-		expectedTopicKind,
-		expectedPushMode,
-		s.environmentID,
-	).Scan(
+			job.JobID,
+			job.LeaseID,
+			deliveryJobClaimed,
+			job.Attempts-1,
+			now,
+			stateActive,
+			expectedLeaseState,
+			expectedTopicKind,
+			expectedPushMode,
+			s.environmentID,
+		)
+	}
+	err = authorityRow.Scan(
+		&authorityExpiresAt,
 		&currentRouteKeyEpoch,
 		&currentPolicyEpoch,
 		&encryptedNonceState,
+		&encryptedTopic,
 		&installationLookup,
+		&installationIdentity,
 		&encryptedCurrentToken,
 		&currentAgePolicy,
 	)
@@ -1822,9 +2421,37 @@ func (s *Store) AcquireDeliveryAttempt(
 		_ = guard.Release()
 		return nil, false, ErrDeliveryQueueUnavailable
 	}
+	defer zero(installationIdentity)
 	if currentAgePolicy == ageTeen && !s.teenConversationEnabled {
 		_ = guard.Release()
 		return nil, false, nil
+	}
+	if s.a9Enabled &&
+		subtle.ConstantTimeCompare(
+			installationIdentity,
+			currentA9Route.installationIdentity,
+		) != 1 {
+		_ = guard.Release()
+		return nil, false, nil
+	}
+	if s.a9Enabled {
+		currentTopic, openErr := s.encryption.Open(
+			leaseContext(job.LeaseID, "topic"),
+			encryptedTopic,
+		)
+		if openErr != nil {
+			_ = guard.Release()
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		topicMatches := subtle.ConstantTimeCompare(
+			currentTopic,
+			job.Job.ProviderTopic,
+		) == 1
+		zero(currentTopic)
+		if !topicMatches {
+			_ = guard.Release()
+			return nil, false, nil
+		}
 	}
 	matches, err := s.deliveryAuthorityMatches(
 		job.Job,
@@ -1843,11 +2470,65 @@ func (s *Store) AcquireDeliveryAttempt(
 		_ = guard.Release()
 		return nil, false, nil
 	}
+	if s.a9Enabled {
+		var finalDatabaseNow time.Time
+		if err = tx.QueryRowContext(
+			ctx,
+			`SELECT pg_catalog.clock_timestamp()`,
+		).Scan(&finalDatabaseNow); err != nil {
+			_ = guard.Release()
+			return nil, false, ErrDeliveryQueueUnavailable
+		}
+		if !a9DeliveryStillCurrent(
+			now,
+			s.now().UTC(),
+			finalDatabaseNow.UTC(),
+			persistedJobExpiresAt.UTC(),
+			authorityExpiresAt.UTC(),
+			currentA9Route,
+			job.Job.A9,
+		) {
+			_ = guard.Release()
+			return nil, false, nil
+		}
+	}
 	guard.installationLookup = append(
 		[]byte(nil),
 		installationLookup...,
 	)
 	return guard, true, nil
+}
+
+func a9DeliveryStillCurrent(
+	evaluationTime time.Time,
+	hostNow time.Time,
+	databaseNow time.Time,
+	jobExpiresAt time.Time,
+	gate6ExpiresAt time.Time,
+	route a9CurrentRouteState,
+	snapshot *interfaces.A9RouteSnapshot,
+) bool {
+	reference, current := a9RouteStillCurrentAt(
+		evaluationTime,
+		hostNow,
+		databaseNow,
+		route,
+		snapshot,
+	)
+	return current &&
+		reference.Before(jobExpiresAt.UTC()) &&
+		reference.Before(gate6ExpiresAt.UTC())
+}
+
+func a9DeliveryReferenceTime(
+	now time.Time,
+	state a9CurrentRouteState,
+	enabled bool,
+) time.Time {
+	if enabled && state.databaseNow.After(now) {
+		return state.databaseNow
+	}
+	return now
 }
 
 // ValidateDeliveryClaim is retained as a read-only compatibility helper for
@@ -2269,7 +2950,20 @@ func (s *Store) ConvertInvalidTokenToErasure(
 		        state = $3,
 		        attempts = 0,
 		        retry_exponent = 0,
-		        available_at = $4
+		        available_at = $4,
+		        a9_installation_binding_id = NULL,
+		        a9_sequencer_epoch = NULL,
+		        a9_subscription_generation = NULL,
+		        a9_binding_id = NULL,
+		        a9_binding_version = NULL,
+		        a9_assertion_hash = NULL,
+		        a9_assertion_stream_sequence = NULL,
+		        a9_topic_key_epoch = NULL,
+		        a9_topic_binding = NULL,
+		        a9_route_key_epoch = NULL,
+		        a9_keyset_sequence = NULL,
+		        a9_keyset_hash = NULL,
+		        a9_watermark_sequence = NULL
 			  WHERE job_id = $5
 			    AND environment = $6`,
 		installationLookup,
@@ -2663,6 +3357,18 @@ func validateSerializedDeliveryJob(
 		!job.Expiration.UTC().After(now.UTC()) {
 		return ErrDeliveryJobInvalid
 	}
+	if (len(job.ProviderTopic) == 0) != (job.A9 == nil) {
+		return ErrDeliveryJobInvalid
+	}
+	if job.A9 != nil &&
+		(len(job.ProviderTopic) != 33 ||
+			job.TrafficClass != DeliveryTrafficConversation ||
+			job.Expiration.UTC().After(
+				job.A9.AssertionExpiresAt.UTC(),
+			) ||
+			!validA9RouteSnapshot(job.A9, job.RouteKeyEpoch, now)) {
+		return ErrDeliveryJobInvalid
+	}
 	switch job.TrafficClass {
 	case DeliveryTrafficConversation:
 		if job.PushType != "alert" || job.Priority != 10 ||
@@ -2682,6 +3388,30 @@ func validateSerializedDeliveryJob(
 	return nil
 }
 
+func validA9RouteSnapshot(
+	snapshot *interfaces.A9RouteSnapshot,
+	routeKeyEpoch uint32,
+	now time.Time,
+) bool {
+	return snapshot != nil &&
+		snapshot.SubscriptionGeneration > 0 &&
+		snapshot.SubscriptionGeneration <= gate8wrapper.MaxCanonicalInteger &&
+		snapshot.BindingVersion > 0 &&
+		snapshot.BindingVersion <= gate8wrapper.MaxCanonicalInteger &&
+		snapshot.AssertionStreamSequence > 0 &&
+		snapshot.AssertionStreamSequence <=
+			gate8wrapper.MaxCanonicalInteger &&
+		snapshot.TopicKeyEpoch > 0 &&
+		snapshot.RouteKeyEpoch > 0 &&
+		snapshot.RouteKeyEpoch == routeKeyEpoch &&
+		snapshot.KeysetSequence > 0 &&
+		snapshot.KeysetSequence <= gate8wrapper.MaxCanonicalInteger &&
+		snapshot.WatermarkSequence > 0 &&
+		snapshot.WatermarkSequence <= gate8wrapper.MaxCanonicalInteger &&
+		!snapshot.AssertionExpiresAt.IsZero() &&
+		snapshot.AssertionExpiresAt.UTC().After(now.UTC())
+}
+
 func validateErasureMarker(job SerializedDeliveryJob) error {
 	token, err := hex.DecodeString(job.DeviceToken)
 	defer zero(token)
@@ -2691,6 +3421,7 @@ func validateErasureMarker(job SerializedDeliveryJob) error {
 		job.PolicyEpoch != 0 || job.RouteKeyEpoch != 0 ||
 		job.NoncePrefix != 0 || job.DeliverySequence != 0 ||
 		job.AliasDay != "" || len(job.RouteAlias) != 0 ||
+		len(job.ProviderTopic) != 0 || job.A9 != nil ||
 		len(job.WelcomeAuthorizationID) != 0 ||
 		len(job.WelcomeEnvelopeDigest) != 0 ||
 		(job.TrafficClass != DeliveryTrafficConversation &&
@@ -2705,6 +3436,7 @@ func cloneSerializedDeliveryJob(job SerializedDeliveryJob) SerializedDeliveryJob
 	return SerializedDeliveryJob{
 		DeviceToken:      job.DeviceToken,
 		Topic:            job.Topic,
+		ProviderTopic:    append([]byte(nil), job.ProviderTopic...),
 		Payload:          append([]byte(nil), job.Payload...),
 		PushType:         job.PushType,
 		Priority:         job.Priority,
@@ -2724,8 +3456,19 @@ func cloneSerializedDeliveryJob(job SerializedDeliveryJob) SerializedDeliveryJob
 			[]byte(nil),
 			job.WelcomeEnvelopeDigest...,
 		),
+		A9:        cloneA9RouteSnapshot(job.A9),
 		EraseOnly: job.EraseOnly,
 	}
+}
+
+func cloneA9RouteSnapshot(
+	snapshot *interfaces.A9RouteSnapshot,
+) *interfaces.A9RouteSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	cloned := *snapshot
+	return &cloned
 }
 
 func deliveryJobContext(jobID []byte) []byte {

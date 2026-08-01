@@ -75,7 +75,8 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT INTO hytch_push_vault.subscription_leases (
-		     lease_id, installation_lookup, topic_lookup, lookup_key_epoch,
+		     lease_id, installation_lookup, installation_identity,
+		     topic_lookup, lookup_key_epoch,
 		     encrypted_topic, encrypted_route_key, encrypted_hmac_keys,
 		     encrypted_receive_capability, environment, payload_schema,
 		     topic_kind, push_mode, state, generation, policy_epoch,
@@ -83,7 +84,8 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 		     issued_at, refreshed_at, expires_at, control_expires_at,
 		     route_identity
 		 ) VALUES (
-		     $1,$2,$3,1,$4,$4,$4,$4,1,1,1,2,2,1,1,1,$4,1,$5,$5,$6,$7,$8
+		     $1,$2,$9,$3,1,$4,$4,$4,$4,1,1,1,2,2,1,1,1,$4,1,
+		     $5,$5,$6,$7,$8
 		 )`,
 		leaseID,
 		installationLookup,
@@ -93,6 +95,7 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 		now.Add(7*24*time.Hour),
 		now.Add(45*time.Second),
 		repeatedBytes(32, 0x1b),
+		repeatedBytes(32, 0x10),
 	)
 	require.NoError(t, err)
 
@@ -101,7 +104,8 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT INTO hytch_push_vault.subscription_leases (
-		     lease_id, installation_lookup, topic_lookup, lookup_key_epoch,
+		     lease_id, installation_lookup, installation_identity,
+		     topic_lookup, lookup_key_epoch,
 		     encrypted_topic, encrypted_route_key, encrypted_hmac_keys,
 		     encrypted_receive_capability, environment, payload_schema,
 		     topic_kind, push_mode, state, generation, policy_epoch,
@@ -109,8 +113,10 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 		     issued_at, refreshed_at, expires_at, control_expires_at,
 		     route_identity
 		 ) VALUES
-		   ($1,$2,$3,1,$4,$4,$4,$4,1,1,2,1,4,1,1,1,$4,1,$5,$5,$6,$7,$10),
-		   ($8,$2,$9,1,$4,$4,$4,$4,1,1,1,1,4,1,1,1,$4,1,$5,$5,$6,$7,$11)`,
+		   ($1,$2,$12,$3,1,$4,$4,$4,$4,1,1,2,1,4,1,1,1,$4,1,
+		    $5,$5,$6,$7,$10),
+		   ($8,$2,$12,$9,1,$4,$4,$4,$4,1,1,1,1,4,1,1,1,$4,1,
+		    $5,$5,$6,$7,$11)`,
 		welcomeLeaseID,
 		installationLookup,
 		repeatedBytes(32, 0x19),
@@ -122,6 +128,7 @@ func TestDeliveryJobStoreEncryptedBoundedLifecycleAndPersistentErasure(t *testin
 		repeatedBytes(32, 0x1a),
 		repeatedBytes(32, 0x1c),
 		repeatedBytes(32, 0x1d),
+		repeatedBytes(32, 0x10),
 	)
 	require.NoError(t, err)
 	_, err = db.ExecContext(
