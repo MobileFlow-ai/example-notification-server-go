@@ -71,6 +71,11 @@ func TestLegacyRetirementPreflightModeIsMutuallyExclusive(t *testing.T) {
 		}(),
 		func() options.Options {
 			config := valid
+			config.A9.Enabled = true
+			return config
+		}(),
+		func() options.Options {
+			config := valid
 			config.Incident.Enabled = true
 			return config
 		}(),
@@ -92,6 +97,26 @@ func TestLegacyRetirementPreflightModeIsMutuallyExclusive(t *testing.T) {
 		func() options.Options {
 			config := valid
 			config.Vault.MasterKeysJSON = "runtime-secret"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A9.KeysetOrigin = "https://runtime-service"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A9.PinnedRootPublicKeyBase64URL = "runtime-key"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A9.PinnedRootKeyID = "runtime-key-id"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A9.TopicCommitmentKeysJSON = "runtime-secret"
 			return config
 		}(),
 		func() options.Options {

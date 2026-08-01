@@ -168,6 +168,44 @@ func requestFingerprint(req interfaces.SendRequest) [sha256.Size]byte {
 		writeFingerprintBool(digest, route.WelcomeAuthorized)
 		writeFingerprintField(digest, route.WelcomeAuthorizationID)
 		writeFingerprintField(digest, route.WelcomeEnvelopeDigest)
+		if route.A9 == nil {
+			writeFingerprintBool(digest, false)
+		} else {
+			writeFingerprintBool(digest, true)
+			a9 := route.A9
+			writeFingerprintField(
+				digest,
+				a9.InstallationBindingID[:],
+			)
+			writeFingerprintField(digest, a9.SequencerEpoch[:])
+			writeFingerprintUint64(
+				digest,
+				a9.SubscriptionGeneration,
+			)
+			writeFingerprintField(digest, a9.BindingID[:])
+			writeFingerprintUint64(digest, a9.BindingVersion)
+			writeFingerprintField(digest, a9.AssertionHash[:])
+			writeFingerprintUint64(
+				digest,
+				a9.AssertionStreamSequence,
+			)
+			writeFingerprintTime(digest, a9.AssertionExpiresAt)
+			writeFingerprintUint64(
+				digest,
+				uint64(a9.TopicKeyEpoch),
+			)
+			writeFingerprintField(digest, a9.TopicBinding[:])
+			writeFingerprintUint64(
+				digest,
+				uint64(a9.RouteKeyEpoch),
+			)
+			writeFingerprintUint64(digest, a9.KeysetSequence)
+			writeFingerprintField(digest, a9.KeysetHash[:])
+			writeFingerprintUint64(
+				digest,
+				a9.WatermarkSequence,
+			)
+		}
 	}
 
 	writeFingerprintField(digest, []byte(req.MessageContext.MessageType))

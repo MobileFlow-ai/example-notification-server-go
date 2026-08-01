@@ -8,11 +8,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/xmtp/example-notification-server-go/pkg/a9api"
 	"github.com/xmtp/example-notification-server-go/pkg/api"
 	"github.com/xmtp/example-notification-server-go/pkg/authority"
 	database "github.com/xmtp/example-notification-server-go/pkg/db"
@@ -46,6 +48,12 @@ const (
 	maxIncidentRoleTTLMinutes          = 120
 	maxIncidentRequestTimeoutSeconds   = 30
 	maxIncidentOversightTimeoutSeconds = 15
+	maxA9KeysetRequestTimeoutSeconds   = 30
+	maxA9ReadHeaderTimeoutSeconds      = 10
+	maxA9RequestTimeoutSeconds         = 30
+	maxA9IdleTimeoutSeconds            = 60
+	minA9HeaderBytes                   = 4 * 1024
+	maxA9HeaderBytes                   = 32 * 1024
 )
 
 func main() {
@@ -148,6 +156,9 @@ func runServer() {
 	if !welcomeRuntimeConfigurationValid(opts.Vault.WelcomeEnabled) {
 		logger.Fatal("welcome routing unavailable in this build")
 	}
+	if !a9RuntimeConfigurationValid(opts) {
+		logger.Fatal("A9 authority configuration invalid")
+	}
 	if opts.MigrationDbConnectionString != "" {
 		logger.Fatal("migration credential present in runtime")
 	}
@@ -198,6 +209,8 @@ func runServer() {
 	var secureStore *vault.Store
 	var retentionSweeper *vault.RetentionSweeper
 	var erasureWorker *delivery.InvalidTokenErasureWorker
+	var a9TrustHandle *vault.A9TrustHandle
+	var a9ControlRuntime *a9Runtime
 	if opts.Vault.Enabled {
 		var parseErr error
 		encryptionKeys, parseErr = vault.ParseKeyring(opts.Vault.MasterKeysJSON)
@@ -214,6 +227,9 @@ func runServer() {
 		if parseErr != nil {
 			logger.Fatal("authority key state invalid")
 		}
+		if opts.A9.Enabled {
+			a9TrustHandle = &vault.A9TrustHandle{}
+		}
 		var storeErr error
 		secureStore, storeErr = vault.NewStore(db, vault.StoreOptions{
 			Environment:   opts.Vault.Environment,
@@ -224,6 +240,8 @@ func runServer() {
 			TeenConversationEnabled: opts.Vault.
 				TeenConversationMode == "enabled",
 			WelcomeEnabled: false,
+			A9Enabled:      opts.A9.Enabled,
+			A9Trust:        a9TrustHandle,
 		})
 		if storeErr != nil {
 			logger.Fatal("secure vault initialization failed")
@@ -264,12 +282,26 @@ func runServer() {
 		// would silently bypass the short-lived capability and lease checks.
 		installationsService = secureStore
 		subscriptionsService = secureStore
-		secureRegistration, storeErr = registration.NewHandler(
+		secureRegistration, storeErr = secureRegistrationForMode(
 			secureStore,
 			opts.Vault.APIBearerToken,
+			opts.A9.Enabled,
 		)
 		if storeErr != nil {
 			logger.Fatal("secure registration initialization failed")
+		}
+	}
+	if opts.A9.Enabled {
+		a9ControlRuntime, err = initializeA9Runtime(
+			ctx,
+			opts.A9,
+			opts.Vault.Environment,
+			db,
+			secureStore,
+			a9TrustHandle,
+		)
+		if err != nil {
+			logger.Fatal("A9 authority initialization failed")
 		}
 	}
 	var notifListener xmtp.NotificationListener
@@ -384,7 +416,9 @@ func runServer() {
 
 	if opts.Api.Enabled {
 		apiServer = api.NewApiServer(logger, opts.Api, installationsService, subscriptionsService, interfaces.ListenerType(opts.Xmtp.ListenerType))
-		if secureRegistration != nil {
+		if opts.A9.Enabled {
+			apiServer.DisableLegacyMutationAPI()
+		} else if secureRegistration != nil {
 			apiServer.EnableSecureRegistration(secureRegistration)
 		}
 		if notifListener != nil {
@@ -401,6 +435,11 @@ func runServer() {
 				return false
 			}
 			if incidentServer != nil && !incidentServer.Ready() {
+				return false
+			}
+			if a9ControlRuntime != nil &&
+				(!a9ControlRuntime.private.Ready() ||
+					!a9TrustReady(a9ControlRuntime.manager)) {
 				return false
 			}
 			if retentionSweeper == nil {
@@ -470,6 +509,23 @@ func runServer() {
 		if err = incidentServer.Prepare(); err != nil {
 			logger.Fatal("failed to prepare private incident access listener")
 		}
+	}
+	if a9ControlRuntime != nil {
+		if err = a9ControlRuntime.private.Start(); err != nil {
+			logger.Fatal("failed to start private A9 authority listener")
+		}
+		go monitorA9PrivateSurfaceFailure(
+			ctx,
+			a9ControlRuntime.private.Failed(),
+			logger,
+			cancel,
+		)
+		go runA9RefreshWorker(
+			ctx,
+			a9ControlRuntime.manager,
+			logger,
+			cancel,
+		)
 	}
 	if incidentServer != nil {
 		if err = incidentServer.Start(); err != nil {
@@ -546,6 +602,22 @@ func runServer() {
 
 	runtimeFailed := waitForShutdown(ctx)
 
+	if a9ControlRuntime != nil {
+		// Stop future refresh attempts before closing the private ingress.
+		// The manager remains live until every routing/egress consumer below
+		// has stopped.
+		cancel()
+		shutdownContext, shutdownCancel := context.WithTimeout(
+			context.Background(),
+			30*time.Second,
+		)
+		if err = a9ControlRuntime.private.
+			Shutdown(shutdownContext); err != nil {
+			logger.Error("A9 private authority shutdown incomplete")
+			runtimeFailed = true
+		}
+		shutdownCancel()
+	}
 	if apiServer != nil {
 		apiServer.Stop()
 	}
@@ -588,6 +660,18 @@ func runServer() {
 		}
 		shutdownCancel()
 	}
+	if a9ControlRuntime != nil {
+		shutdownContext, shutdownCancel := context.WithTimeout(
+			context.Background(),
+			45*time.Second,
+		)
+		if err = a9ControlRuntime.manager.
+			CloseContext(shutdownContext); err != nil {
+			logger.Error("A9 trust shutdown incomplete")
+			runtimeFailed = true
+		}
+		shutdownCancel()
+	}
 	if runtimeFailed {
 		panic("runtime control failed")
 	}
@@ -599,6 +683,77 @@ func welcomeRuntimeConfigurationValid(enabled bool) bool {
 
 func apnsRuntimeConfigurationValid(enabled bool) bool {
 	return !enabled
+}
+
+func a9RuntimeConfigurationValid(config options.Options) bool {
+	if !config.A9.Enabled {
+		return !config.A9.HasTrustMaterial()
+	}
+	if !config.Vault.Enabled ||
+		!config.Api.Enabled ||
+		!config.Xmtp.ListenerEnabled ||
+		config.Xmtp.ListenerType != "v4" ||
+		config.Vault.APIBearerToken != "" ||
+		config.A9.KeysetOrigin == "" ||
+		config.A9.PinnedRootPublicKeyBase64URL == "" ||
+		config.A9.PinnedRootKeyID == "" ||
+		config.A9.TopicCommitmentKeysJSON != "" ||
+		config.A9.TopicCommitmentKeysFilePath == "" ||
+		!filepath.IsAbs(config.A9.TopicCommitmentKeysFilePath) ||
+		config.A9.KeysetRequestTimeoutSeconds < 1 ||
+		config.A9.KeysetRequestTimeoutSeconds >
+			maxA9KeysetRequestTimeoutSeconds {
+		return false
+	}
+	if _, valid := checkedA9PrivateServerOptions(config.A9); !valid {
+		return false
+	}
+	return true
+}
+
+func checkedA9PrivateServerOptions(
+	config options.A9Options,
+) (a9api.PrivateServerOptions, bool) {
+	if config.ReadHeaderTimeoutSeconds < 1 ||
+		config.ReadHeaderTimeoutSeconds >
+			maxA9ReadHeaderTimeoutSeconds ||
+		config.ReadTimeoutSeconds <
+			config.ReadHeaderTimeoutSeconds ||
+		config.ReadTimeoutSeconds >
+			maxA9RequestTimeoutSeconds ||
+		config.WriteTimeoutSeconds < 1 ||
+		config.WriteTimeoutSeconds >
+			maxA9RequestTimeoutSeconds ||
+		config.IdleTimeoutSeconds < 1 ||
+		config.IdleTimeoutSeconds >
+			maxA9IdleTimeoutSeconds ||
+		config.MaxHeaderBytes < minA9HeaderBytes ||
+		config.MaxHeaderBytes > maxA9HeaderBytes {
+		return a9api.PrivateServerOptions{}, false
+	}
+	serverOptions := a9api.PrivateServerOptions{
+		BindAddress:          config.PrivateBindAddress,
+		AllowUnspecifiedBind: config.AllowWildcardPrivateBind,
+		CertificatePath:      config.TLSCertificateFilePath,
+		PrivateKeyPath:       config.TLSPrivateKeyFilePath,
+		ReadHeaderTimeout:    time.Duration(
+			config.ReadHeaderTimeoutSeconds,
+		) * time.Second,
+		ReadTimeout:          time.Duration(
+			config.ReadTimeoutSeconds,
+		) * time.Second,
+		WriteTimeout:         time.Duration(
+			config.WriteTimeoutSeconds,
+		) * time.Second,
+		IdleTimeout:          time.Duration(
+			config.IdleTimeoutSeconds,
+		) * time.Second,
+		MaxHeaderBytes:       config.MaxHeaderBytes,
+	}
+	if a9api.ValidatePrivateServerOptions(serverOptions) != nil {
+		return a9api.PrivateServerOptions{}, false
+	}
+	return serverOptions, true
 }
 
 func checkedSecureLeaseTTL(hours int) (time.Duration, bool) {
@@ -788,6 +943,7 @@ func legacyRetirementPreflightModeValid(config options.Options) bool {
 		!config.Fcm.Enabled &&
 		!config.HttpDelivery.Enabled &&
 		!config.Vault.Enabled &&
+		!config.A9.Enabled &&
 		!config.Incident.Enabled &&
 		!legacyRetirementPreflightRuntimeCredentialPresent(config)
 }
@@ -891,6 +1047,7 @@ func legacyRetirementPreflightRuntimeCredentialPresent(
 		config.Vault.LookupKey != "" ||
 		config.Vault.AuthorityPublicKeysJSON != "" ||
 		config.Vault.APIBearerToken != "" ||
+		config.A9.HasTrustMaterial() ||
 		config.Incident.ActorCredentialsJSON != "" ||
 		config.Incident.OversightWebhookURL != "" ||
 		config.Incident.OversightWebhookBearer != ""

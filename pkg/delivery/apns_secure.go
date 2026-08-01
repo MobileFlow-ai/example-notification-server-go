@@ -63,7 +63,28 @@ func (a ApnsDelivery) buildSecureNotification(
 	}
 	if !now.Before(route.LeaseExpiresAt) ||
 		!now.Before(route.ControlExpiresAt) ||
+		(route.A9 != nil &&
+			!now.Before(route.A9.AssertionExpiresAt)) ||
 		gate8wrapper.UTCDay(now) != route.AliasDay {
+		return nil, ErrSecurePayloadInvalid
+	}
+	if route.A9 != nil &&
+		(req.MessageContext.MessageType != topics.V3Conversation ||
+			route.A9.SubscriptionGeneration == 0 ||
+			route.A9.SubscriptionGeneration >
+				gate8wrapper.MaxCanonicalInteger ||
+			route.A9.BindingVersion == 0 ||
+			route.A9.BindingVersion > gate8wrapper.MaxCanonicalInteger ||
+			route.A9.AssertionStreamSequence == 0 ||
+			route.A9.AssertionStreamSequence >
+				gate8wrapper.MaxCanonicalInteger ||
+			route.A9.TopicKeyEpoch == 0 ||
+			route.A9.RouteKeyEpoch != route.RouteKeyEpoch ||
+			route.A9.KeysetSequence == 0 ||
+			route.A9.KeysetSequence > gate8wrapper.MaxCanonicalInteger ||
+			route.A9.WatermarkSequence == 0 ||
+			route.A9.WatermarkSequence >
+				gate8wrapper.MaxCanonicalInteger) {
 		return nil, ErrSecurePayloadInvalid
 	}
 
@@ -75,6 +96,9 @@ func (a ApnsDelivery) buildSecureNotification(
 	binary.BigEndian.PutUint32(noncePrefix[:], route.NoncePrefix)
 	aliasDay := route.AliasDay
 	topicBytes := req.Subscription.TopicV4.Bytes()
+	if route.A9 != nil && len(topicBytes) != 33 {
+		return nil, ErrSecurePayloadInvalid
+	}
 	expectedAlias, err := gate8wrapper.DeriveRouteAlias(
 		route.RouteKey,
 		topicBytes,
@@ -175,6 +199,9 @@ func (a ApnsDelivery) buildSecureNotification(
 		route.ControlExpiresAt,
 		now.Add(15*time.Minute),
 	)
+	if route.A9 != nil {
+		expiry = earliestTime(expiry, route.A9.AssertionExpiresAt)
+	}
 	return &apns2.Notification{
 		DeviceToken: req.Installation.DeliveryMechanism.Token,
 		Topic:       a.opts.Topic,
