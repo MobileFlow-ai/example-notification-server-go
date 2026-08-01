@@ -122,6 +122,27 @@ type Subscription struct {
 	SecureRoute           *SecureRoute `json:"-"`
 }
 
+// A9RouteSnapshot is the exact A9 authority provenance selected with a route.
+// It is current-operation material only: callers may carry it into the
+// encrypted delivery job, but must never serialize it outside that boundary
+// or emit it to logs, traces, metrics, or errors.
+type A9RouteSnapshot struct {
+	InstallationBindingID  [16]byte  `json:"installation_binding_id"`
+	SequencerEpoch         [16]byte  `json:"sequencer_epoch"`
+	SubscriptionGeneration uint64    `json:"subscription_generation"`
+	BindingID               [16]byte  `json:"binding_id"`
+	BindingVersion          uint64    `json:"binding_version"`
+	AssertionHash           [32]byte  `json:"assertion_hash"`
+	AssertionStreamSequence uint64    `json:"assertion_stream_sequence"`
+	AssertionExpiresAt      time.Time `json:"assertion_expires_at"`
+	TopicKeyEpoch           uint32    `json:"topic_key_epoch"`
+	TopicBinding            [32]byte  `json:"topic_binding"`
+	RouteKeyEpoch           uint32    `json:"route_key_epoch"`
+	KeysetSequence          uint64    `json:"keyset_sequence"`
+	KeysetHash              [32]byte  `json:"keyset_hash"`
+	WatermarkSequence       uint64    `json:"watermark_sequence"`
+}
+
 // SecureRoute contains only current-operation material decrypted inside the
 // Gate-8 vault boundary. It must never be serialized or logged.
 type SecureRoute struct {
@@ -142,6 +163,7 @@ type SecureRoute struct {
 	// must never be serialized outside the encrypted job.
 	WelcomeAuthorizationID []byte
 	WelcomeEnvelopeDigest  []byte
+	A9                     *A9RouteSnapshot
 }
 
 type SendRequest struct {

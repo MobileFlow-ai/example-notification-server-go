@@ -352,6 +352,19 @@ func (a *ApnsDelivery) enqueueNotification(
 	job.DeliverySequence = secureRoute.DeliverySequence
 	job.AliasDay = secureRoute.AliasDay
 	job.RouteAlias = append([]byte(nil), secureRoute.RouteAlias...)
+	if secureRoute.A9 != nil {
+		if job.TrafficClass != vault.DeliveryTrafficConversation ||
+			req.Subscription.TopicV4 == nil {
+			return ErrAPNSRejected
+		}
+		providerTopic := req.Subscription.TopicV4.Bytes()
+		if len(providerTopic) != 33 {
+			return ErrAPNSRejected
+		}
+		a9Snapshot := *secureRoute.A9
+		job.ProviderTopic = append([]byte(nil), providerTopic...)
+		job.A9 = &a9Snapshot
+	}
 	if job.TrafficClass == vault.DeliveryTrafficWelcome {
 		job.WelcomeAuthorizationID = append(
 			[]byte(nil),

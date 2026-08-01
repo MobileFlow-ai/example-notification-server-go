@@ -805,6 +805,58 @@ type secureMountBackend struct {
 	welcomeCalls int
 }
 
+func TestDisableLegacyMutationAPIClosesConnectMethodsWithoutMountingHandler(
+	t *testing.T,
+) {
+	server := NewApiServer(
+		testutils.TestLogger(t),
+		options.ApiOptions{},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV4,
+	)
+
+	server.DisableLegacyMutationAPI()
+	server.DisableLegacyMutationAPI()
+	backend := &secureMountBackend{}
+	handler, err := registration.NewHandler(
+		backend,
+		"0123456789abcdef0123456789abcdef",
+	)
+	require.NoError(t, err)
+	server.EnableSecureRegistration(handler)
+
+	require.True(t, server.secureMode)
+	require.True(t, server.legacyMutationAPIDisabled)
+	require.Nil(t, server.secureRefresh)
+
+	_, err = server.RegisterInstallation(
+		t.Context(),
+		connect.NewRequest(&proto.RegisterInstallationRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.DeleteInstallation(
+		t.Context(),
+		connect.NewRequest(&proto.DeleteInstallationRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.Subscribe(
+		t.Context(),
+		connect.NewRequest(&proto.SubscribeRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.Unsubscribe(
+		t.Context(),
+		connect.NewRequest(&proto.UnsubscribeRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.SubscribeWithMetadata(
+		t.Context(),
+		connect.NewRequest(&proto.SubscribeWithMetadataRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
 func (b *secureMountBackend) Refresh(
 	context.Context,
 	vault.RefreshRequest,

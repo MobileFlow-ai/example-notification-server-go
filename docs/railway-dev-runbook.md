@@ -6,18 +6,21 @@ All numeric limits below are provisional defaults pending measurement.
 
 ## Current deployment gate
 
-This revision is **not yet authorized for APNS egress or database retirement**.
-The bridge-local subscription API is not bound to modern-api's authoritative
-A9 roster lease, and the server-owned adapter is still a design proposal rather
-than committed code on both sides. Welcome is compiled hard-closed. The exact
-zero/one live provider-call proof also requires a versioned Gate 8 amendment
-and recorded Security and Privacy approval; current Gate 8 has no debug or
-internal-cohort exception.
+This revision is **not yet authorized for A9 activation, APNS egress,
+deployment, or database retirement**. The repository contains the mirrored A9
+v1 conformance contract and dormant bridge runtime source, but local formatting,
+compile, test, database, and integration QA for that source is
+**UNCONFIRMED**. Source availability is not runtime, modern-api rollout,
+migration, client-vector, or end-to-end evidence.
 
-Do not activate the legacy-retirement function, deploy with
-`APNS_ENABLED=true`, or claim end-to-end readiness until those blockers are
-closed and this section is updated in the same reviewed change. Read-only
-Railway and database audits remain permitted.
+Welcome remains compiled hard-closed. The exact zero/one live provider-call
+proof also requires the versioned Gate 8 amendment and recorded Security and
+Privacy approval; current Gate 8 has no debug or internal-cohort exception.
+
+Do not enable A9, activate any migration or the legacy-retirement function,
+deploy this candidate, set `APNS_ENABLED=true`, or claim end-to-end readiness
+until those blockers are closed and this section is updated in the same
+reviewed change. Read-only Railway and database audits remain permitted.
 
 ## Safety contract
 
@@ -57,10 +60,11 @@ corresponding modern-api/iOS vector suite passes.
   replicas, but APNS is still at-least-once across a crash after Apple accepts a
   notification and before the success deletion commits.
 - Use the checked-in `railway.toml`. It runs API plus V3 listener against XMTP
-  dev and enables the secure vault. This blocked audit build configures no
-  delivery service: `APNS_ENABLED` must remain false, and startup rejects true.
-  The listener may consume XMTP for health/audit behavior with zero delivery
-  services.
+  dev and enables the secure vault. This blocked audit configuration does not
+  activate A9; dormant A9 mode requires a V4 listener and rejects V3. The
+  configuration supplies no delivery service: `APNS_ENABLED` must remain
+  false, and startup rejects true. The listener may consume XMTP for
+  health/audit behavior with zero delivery services.
 - Railway's deployment healthcheck is `GET /readyz`; Railway evaluates it while
   bringing up a deployment, not as a continuous restart probe. The checked-in
   restart policy responds to process exit. Continuous `/readyz` monitoring must
@@ -70,8 +74,11 @@ corresponding modern-api/iOS vector suite passes.
 - `GET /readyz` is aggregate readiness. It is `503 not_ready` when XMTP is
   disconnected, retention is unsafe, a configured APNS worker has stopped, or
   the deletion-only invalid-token worker is unavailable. This hard-closed build
-  has no APNS worker to evaluate. When the private incident-access listener is
-  enabled, its failure also removes readiness and terminates the runtime.
+  has no APNS worker to evaluate. When separately configured, private
+  incident-access failure removes readiness and terminates the runtime. The
+  dormant A9 path would additionally require its private listener plus a
+  bounded durable-current keyset/TOPIC join; either failure is non-ready and
+  fail-stop.
 - `GET /health/xmtp` reports only the XMTP dependency: `200 ok` or
   `503 xmtp_unavailable`. modern-api consumes this endpoint.
 - All three responses are content-free. Liveness does not authorize delivery.
@@ -86,7 +93,8 @@ original expiry; an outage never extends authority.
 Inspect names and presence only. Never print or copy values into commands,
 logs, screenshots, tickets, Mattermost, this repository, or evidence files.
 
-Required secure bridge variables:
+Required secure bridge variables for the checked-in, non-A9 blocked audit
+configuration:
 
 - `DB_CONNECTION_STRING`
 - `HYTCH_SECURE_VAULT=true`
@@ -137,11 +145,11 @@ Current blocked-state APNS setting:
 
 - `APNS_ENABLED=false`
 
-Do not load or use APNS provider credentials until A9/G8 implementation and
-activation are approved in a reviewed change. The current binary also rejects
-`APNS_ENABLED=true` at runtime startup, so a stale Railway variable fails
-closed rather than enabling provider egress. Maintenance-only migration and
-preflight modes cannot initialize APNS.
+Do not load or use APNS provider credentials until A9 activation evidence and
+the G8 amendment are approved in a reviewed change. The current binary also
+rejects `APNS_ENABLED=true` at runtime startup, so a stale Railway variable
+fails closed rather than enabling provider egress. Maintenance-only migration
+and preflight modes cannot initialize APNS.
 
 Post-gate APNS sandbox variables, after that startup rejection is removed in
 the same reviewed implementation:
@@ -160,6 +168,10 @@ Required listener/runtime variables:
 - `API_PORT`
 - `LOG_ENCODING`
 - `LOG_LEVEL`
+
+The dormant A9 configuration instead requires `LISTENER_TYPE=v4`, forbids
+`BRIDGE_API_BEARER_TOKEN`, and adds the A9 names and restricted file mounts
+listed below. Do not mix the two configuration sets.
 
 Provisional APNS controls and their defaults:
 
@@ -204,95 +216,131 @@ before APNS or XMTP starts. Startup validates the oversight destination's
 syntax but does not claim that the remote endpoint is reachable. A broadcaster
 failure during approval denies that approval without exposing vault data.
 
-## Bridge-local API proposal
+## Dormant A9 v1 private authority runtime
 
-These routes are a fail-closed bridge stub, not the authoritative A9 contract.
-They require `Authorization: Bearer <BRIDGE_API_BEARER_TOKEN>`, reject unknown
-JSON fields, bound request sizes, return fixed errors, and set
-`Cache-Control: no-store`. The static bearer and local signed objects do not
-replace modern-api's session-bound A9 API or its signed `hytch.roster-lease`.
+The bridge contains a dormant source path for the mirrored A9 v1 contract. It
+is not enabled by the checked-in Railway configuration and has not completed
+local QA, migration activation, Railway deployment, client-vector, or
+end-to-end proof. This section records the source-level configuration and
+fail-closed behavior only.
 
-The agreed direction is a modern-api durable outbox feeding a bridge-owned,
-audience-bound server adapter. That adapter must transactionally derive
-authority from the exact active A9 conversation generation, roster version,
-account incarnation, and transport claim. The raw `roster_digest` remains only
-with modern-api authority; the bridge assertion carries a domain-separated
-keyed roster commitment instead. Subscription replacement and its final
-pre-egress use must linearize in one vault CAS bound to
-`installation_binding_id + topic_key_epoch + topic_binding`. The adapter must
-apply a contiguous revoke-wins control stream, stop advancing watermarks while
-modern-api authority is uncertain, and fail egress closed on expiry, a stream
-gap, or an epoch change. The corrected, reviewed v1 ACK is:
-<https://mattermost.gocybered.com/pl/ys8kjnuju7yojfd75frgh9m9kr>. It
-supersedes the observer, roster-field, and subscription-CAS portions of the
-earlier proposal. It records design agreement only—not implementation,
-migration, conformance vectors, or end-to-end proof. It is **UNIMPLEMENTED**,
-Welcome remains closed, and deployment is therefore blocked.
+### Required configuration
 
-### Atomic subscription replacement
+A future separately approved A9 exercise would require these exact names:
 
-`PUT /internal/v1/xmtp-push/subscriptions:replace`
+- `BRIDGE_A9_ENABLED=true`
+- `BRIDGE_A9_KEYSET_ORIGIN`
+- `BRIDGE_A9_PINNED_ROOT_PUBLIC_KEY`
+- `BRIDGE_A9_PINNED_ROOT_KEY_ID`
+- `BRIDGE_A9_TOPIC_COMMITMENT_KEYS_FILE_PATH`
+- `BRIDGE_A9_PRIVATE_BIND=127.0.0.1:9443`
+- `BRIDGE_A9_ALLOW_WILDCARD_PRIVATE_BIND=false`
+- `BRIDGE_A9_TLS_CERTIFICATE_FILE_PATH`
+- `BRIDGE_A9_TLS_PRIVATE_KEY_FILE_PATH`
+- `BRIDGE_A9_KEYSET_REQUEST_TIMEOUT_SECONDS=10`
+- `BRIDGE_A9_READ_HEADER_TIMEOUT_SECONDS=5`
+- `BRIDGE_A9_READ_TIMEOUT_SECONDS=15`
+- `BRIDGE_A9_WRITE_TIMEOUT_SECONDS=15`
+- `BRIDGE_A9_IDLE_TIMEOUT_SECONDS=30`
+- `BRIDGE_A9_MAX_HEADER_BYTES=16384`
 
-```text
-{
-  schema_version: 1,
-  environment,
-  installation_id,
-  account_incarnation_id,
-  generation,
-  idempotency_key,
-  apns_token_b64,
-  payload_schema: "hytch_push_wrapper_v1",
-  policy_control: PolicyControlV1,
-  subscriptions: [{
-    topic_b64,
-    route_key_b64,
-    route_key_epoch,
-    hmac_keys: [{
-      thirty_day_periods_since_epoch,
-      key_b64
-    }],
-    receive_capability: ReceiveCapabilityV1
-  }]
-}
-```
+It also requires secure-vault mode, the public API, and the XMTP V4 listener.
+`BRIDGE_API_BEARER_TOKEN` must be absent. The deprecated
+`BRIDGE_A9_TOPIC_COMMITMENT_KEYS_JSON` must be absent; inline TOPIC secrets are
+rejected. When `BRIDGE_A9_ENABLED` is false, no A9 trust material or wildcard
+opt-in may remain configured. Partial A9 configuration fails startup.
 
-The list is a full atomic replacement, not a one-topic mutation. One logical DM
-may span multiple conversation topics, and an explicit empty list removes the
-last conversation route. Every Welcome topic is rejected before retention
-lookup or persistence; callers must not send a suppressed Welcome sentinel,
-route key, or capability. Route-key or APNS-token rotation cancels queued work
-bound to the old key/token; an ordinary fresh-control refresh preserves valid
-retries.
+`BRIDGE_A9_KEYSET_ORIGIN` is an exact private HTTPS modern-api origin used only
+for root-pinned keyset discovery. The root public key and its derived key ID
+are out-of-band pins; they are not fetched from that origin.
 
-`ReceiveCapabilityV1` uses Gate 6's exact v1 field set. It does not contain the
-obsolete `expected_conversation_commitment`. Environment is exactly
-`dev | production`; `installation_id` is exactly 64 lowercase hexadecimal
-characters, and `account_incarnation_id` is a canonical lowercase hyphenated
-UUID. Those local checks are necessary but not A9 authority.
+The TOPIC key path must be absolute and identify one nonempty, stable regular
+file no larger than 64 KiB. Symlinks, executable bits, special mode bits, and
+all group/other permissions are rejected; use an owner-readable restricted
+file such as mode `0400` or `0600`. The bridge checks identity and size across
+open/read, consumes the file once during initialization, and clears the input
+buffer. It does not accept the secret through an environment string.
 
-### Policy advancement
+The certificate and private-key paths must also be absolute, stable regular
+files, each nonempty and no larger than 1 MiB. Both reject symlinks, executable
+bits, and special mode bits. The certificate must be owner-readable and not
+group/other-writable; the private key must be owner-readable with no
+group/other permissions. Their input buffers are cleared after loading.
 
-`POST /internal/v1/xmtp-push/policy:advance`
+### Private transport and one-use service authentication
 
-The body is one signed `PolicyControlV1`. A newer revoke disables lookup first,
-cancels leases/jobs through the vault transaction, and cannot be reversed by a
-stale generation or a same-epoch active replay.
+The A9 listener is a separate numeric-IP bind. It serves TLS 1.3 only, with
+HTTP/1.1 and HTTP/2 over TLS; it has no plaintext or h2c path and discards
+forwarding/proxy headers. This is server-certificate TLS, **not mTLS**. Client
+authentication is the compact signed `SERVICE_AUTH` JWT/JWS in
+`Authorization: Bearer ...`.
 
-### Welcome compatibility endpoint
+The one-use JWS binds the environment, uppercase HTTP method, exact path, and
+request-body digest. Its signing key comes from the current root-pinned
+keyset. The bridge durably consumes `(environment, jti)` before dispatch, so a
+proved replay is rejected and replay-store unavailability or commit ambiguity
+returns a fixed unavailable response. Unknown paths, wrong methods, non-TLS
+requests, malformed authentication, non-JSON content, oversized bodies,
+unknown JSON fields, and unavailable trust all fail closed with fixed,
+non-secret responses.
 
-`POST /internal/v1/xmtp-push/welcomes:authorize` is retained only to fail old
-internal callers closed. After authenticating the service bearer, it returns a
-fixed `503` before reading the request body. There is no operator setting that
-can enable it in this build.
+The only private A9 routes are:
 
-XMTP iOS 4.10.0 has no proven exact pre-import Welcome correlator, and the
-production product-authority adapter is unavailable. Outer-envelope byte
-correlation or a caller-supplied conversation commitment is not evidence that
-the envelope belongs to the authorized Hytch conversation. Any future
-enablement requires a new reviewed contract and hostile-unrelated-group,
-byte-identity, replay, crash-recovery, and atomic-consume evidence across the
-owning repositories.
+- `POST /internal/v1/xmtp-push/a9-authority:apply`
+- `POST /internal/v1/xmtp-push/a9-watermarks:apply`
+- `PUT /internal/v1/xmtp-push/subscriptions:replace`
+
+Control is contiguous and revoke-wins; uncertainty and gaps are non-passing.
+The watermark path records signed uncertainty rather than manufacturing a
+passing zero. Subscription replacement is a full atomic replacement bound to
+the exact root-verified keyset receipt and current TOPIC binding. Its vault CAS
+and final route/pre-egress checks bind installation, topic epoch, topic
+commitment, authority, watermark, and Gate 6 state. Raw `roster_digest` is not
+a bridge persistence field. These statements describe the dormant source
+contract, not activated adapter or delivery evidence.
+
+There is no A9 Welcome route. Welcome remains rejected at its existing
+boundaries, and every public Connect installation/subscription mutation
+returns `failed_precondition` while A9 mode is selected. No replacement
+authority handler is mounted on the public API mux; all A9 ingress belongs to
+the dedicated private TLS listener.
+
+### Bind isolation, readiness, and shutdown
+
+The default bind is loopback. A numeric private, loopback, or link-local
+address is accepted only with
+`BRIDGE_A9_ALLOW_WILDCARD_PRIVATE_BIND=false`. An unspecified bind such as
+`0.0.0.0:9443` is accepted only with the exact wildcard opt-in set true. That
+opt-in is forbidden until independent Railway evidence proves the port has no
+public domain or public TCP proxy, is reachable only through Railway's private
+network, and remains protected by the one-use JWS boundary. The application
+does not infer private-only ingress from a Railway variable or forwarded
+header.
+
+Initialization loads the TOPIC file, constructs the root-pinned trust manager,
+and completes an initial remote/durable keyset refresh before exposing the
+private listener, XMTP listener, or public API. A fetch, validation, durable
+join, certificate, bind, or listener failure aborts startup. Aggregate
+`/readyz` then performs a one-second read-only durable-current trust join and
+requires the exact current-epoch TOPIC secret as well as private-listener
+readiness.
+
+The refresh worker starts before XMTP and the public API. It refreshes ahead of
+the hard deadline and retries transient failures without extending authority.
+A retained snapshot may be retryable only until its original deadline;
+readiness, routing, and final pre-egress checks independently deny expired,
+gapped, uncertain, or epoch-mismatched state. Loss of a usable refresh
+deadline, private-listener failure, or a recovered private-handler panic
+cancels the runtime. `/livez` remains process liveness and does not authorize
+A9 or delivery.
+
+On shutdown, refresh attempts are cancelled and private A9 ingress closes
+first. The public API, XMTP listener, APNS worker if one is ever separately
+authorized, and deletion-only erasure worker stop before the trust manager is
+closed and its TOPIC material is released. Incomplete private-listener or
+trust-manager shutdown is a runtime failure. None of this dormant wiring
+authorizes migration activation, deployment, APNS, Welcome, or E2E claims;
+local QA remains **UNCONFIRMED**.
 
 ## Private incident-access contract
 
@@ -598,11 +646,12 @@ export/import and destructive restore rehearsal remain manual and
 
 ## Deploy to Railway dev
 
-1. Require a committed and locally tested server-owned A9 adapter on both
-   modern-api and the bridge. Its control watermark, subscription binding,
-   revoke ordering, and final pre-egress check must match the reviewed
-   cross-track contract. A Mattermost proposal alone does not satisfy this
-   gate.
+1. Require the exact A9 v1 mirror and dormant bridge source to pass the complete
+   local QA matrix, then require separately reviewed modern-api authority
+   rollout and cross-repository evidence for control watermarks, subscription
+   binding, revoke ordering, and the final pre-egress check. The current bridge
+   QA and all runtime/deployment evidence are **UNCONFIRMED**, so this step is
+   not satisfied.
 2. Confirm the selected Railway project, environment, and service are exactly
    the dev bridge. Confirm the PostgreSQL service is the dedicated,
    legacy-retired dev database, logical bridge environment is `dev`, APNS mode
@@ -684,9 +733,10 @@ ambiguity, `MULTIPLE`, retry, unmatched or unrelated provider traffic,
 overflow, lost state, and every other observer failure are
 `INCONCLUSIVE`—never a passing zero or one.
 
-After that approval and the A9 adapter gate, use a dedicated synthetic dev
-installation and never persist the device token, topic, route key, HMAC key,
-signed authority, ciphertext, observer handle, or provider identifier:
+After that approval and the separately satisfied A9 activation gate, use a
+dedicated synthetic dev installation and never persist the device token,
+topic, route key, HMAC key, signed authority, ciphertext, observer handle, or
+provider identifier:
 
 1. Verify the exact deployment, one ready replica, autoscaling off, APNS
    sandbox, and an independently fresh A9 control watermark.
@@ -838,10 +888,11 @@ revision that permits APNS egress:
 - **Route key:** the device increments `route_key_epoch` in an authenticated
   full replacement. The bridge resets nonce state only for the higher epoch and
   cancels queued ciphertext bound to the prior key.
-- **API Bearer token:** the current bridge accepts one token, so rotation
-  requires an ordered, brief fail-closed cutover with modern-api. Do not send
-  the token through Mattermost or a ticket. A zero-downtime overlapping token
-  ring is **UNCONFIRMED** and would require a versioned contract change.
+- **Legacy API bearer token:** this applies only to the non-A9 blocked audit
+  configuration. It accepts one token, so rotation requires an ordered, brief
+  fail-closed cutover with modern-api. Do not send the token through Mattermost
+  or a ticket. A9 mode rejects this variable and uses one-use
+  root-keyset-verified service JWS authentication instead.
 
 Every rotation ends with the negative policy fixtures, sanitized log scan, and
 health checks. Never rotate credentials as an unrecorded side effect of a
