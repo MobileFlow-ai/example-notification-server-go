@@ -1,4 +1,4 @@
-package crypto
+package a9trust
 
 import (
 	"crypto/ed25519"
@@ -51,80 +51,131 @@ type JWTExpectations struct {
 	Replay      *ReplayStore
 }
 
-// VerifyJWT verifies exact compact/JCS spelling, claims, request binding,
-// Ed25519 signature, online key state, time window, and one-use semantics.
-func VerifyJWT(compact string, expected JWTExpectations) Verdict {
+// VerifiedJWT contains only the fixed service-auth fields needed to consume a
+// replay fence after the compact token has been completely verified.
+type VerifiedJWT struct {
+	Environment string
+	JTI         string
+	KeyID       string
+	IssuedAt    time.Time
+	NotBefore   time.Time
+	ExpiresAt   time.Time
+	RetainUntil time.Time
+}
+
+// ValidateJWT verifies exact compact/JCS spelling, claims, request binding,
+// Ed25519 signature, online key state, and the time window. It deliberately
+// does not consume replay state so a production caller can use a durable,
+// cross-replica store before parsing the request schema.
+func ValidateJWT(
+	compact string,
+	expected JWTExpectations,
+) (VerifiedJWT, Verdict) {
 	segments := strings.Split(compact, ".")
 	if len(segments) != 3 {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	header, ok := decodeCanonicalJSONObject(segments[0])
 	if !ok || !exactFields(header, jwtHeaderFields) ||
 		objectString(header, "alg") != "EdDSA" ||
 		objectString(header, "typ") != "JWT" {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	claims, ok := decodeCanonicalJSONObject(segments[1])
 	if !ok || !exactFields(claims, jwtClaimFields) {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	signature, err := DecodeBase64URL(segments[2], ed25519.SignatureSize)
 	if err != nil {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	if objectString(claims, "iss") != "hytch-modern-api" ||
 		objectString(claims, "sub") != "xmtp-push-a9-adapter" ||
 		objectString(claims, "aud") != "hytch.xmtp-push-bridge.a9-control" ||
 		objectString(claims, "environment") != expected.Environment {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	jti := objectString(claims, "jti")
 	if _, err := ParseCanonicalUUID(jti); err != nil {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	method := objectString(claims, "method")
 	path := objectString(claims, "path")
 	if method == "" || method != strings.ToUpper(method) || method != expected.Method ||
 		path == "" || strings.ContainsAny(path, "?#") || path != expected.Path {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	requestHash := objectString(claims, "request_sha256")
 	sum := sha256.Sum256(expected.RequestBody)
 	if !IsLowerHexSHA256(requestHash) ||
 		!constantTimeStringEqual(requestHash, hex.EncodeToString(sum[:])) {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	iat, verdict := nonnegativeInteger(claims["iat"])
 	if !verdict.IsEligible() {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	nbf, verdict := nonnegativeInteger(claims["nbf"])
 	if !verdict.IsEligible() {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	exp, verdict := nonnegativeInteger(claims["exp"])
 	if !verdict.IsEligible() || exp <= iat || exp-iat > 60 ||
 		nbf > iat || nbf+5 < iat {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
-	now := expected.Now.UTC().Unix()
-	if now < int64(nbf)-5 || now > int64(exp)+5 {
-		return Invalid("SERVICE_AUTH")
+	issuedAt := time.Unix(int64(iat), 0).UTC()
+	notBefore := time.Unix(int64(nbf), 0).UTC()
+	retainUntil := time.Unix(int64(exp)+5, 0).UTC()
+	now := expected.Now.UTC()
+	if now.Before(issuedAt.Add(-5*time.Second)) ||
+		now.Before(notBefore.Add(-5*time.Second)) ||
+		now.After(retainUntil) {
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	if expected.Keyset == nil {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	kid := objectString(header, "kid")
-	publicKey, keyVerdict := OnlineKeyAt(expected.Keyset, kid, "SERVICE_AUTH", time.Unix(int64(iat), 0).UTC())
+	publicKey, keyVerdict := OnlineKeyAt(
+		expected.Keyset,
+		kid,
+		"SERVICE_AUTH",
+		issuedAt,
+	)
 	if !keyVerdict.IsEligible() {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
 	}
 	signingInput := segments[0] + "." + segments[1]
 	if !ed25519.Verify(ed25519.PublicKey(publicKey), []byte(signingInput), signature) {
-		return Invalid("SERVICE_AUTH")
+		return VerifiedJWT{}, Invalid("SERVICE_AUTH")
+	}
+	return VerifiedJWT{
+		Environment: expected.Environment,
+		JTI:         jti,
+		KeyID:       kid,
+		IssuedAt:    issuedAt,
+		NotBefore:   notBefore,
+		ExpiresAt:   time.Unix(int64(exp), 0).UTC(),
+		RetainUntil: retainUntil,
+	}, Eligible()
+}
+
+// VerifyJWT retains the in-process replay model used by the published
+// conformance vectors. Runtime authentication must use a durable replay store
+// through pkg/a9auth instead.
+func VerifyJWT(compact string, expected JWTExpectations) Verdict {
+	verified, verdict := ValidateJWT(compact, expected)
+	if !verdict.IsEligible() {
+		return verdict
 	}
 	if expected.Replay == nil ||
-		!expected.Replay.Consume(expected.Environment, jti, time.Unix(int64(exp)+5, 0).UTC(), expected.Now) {
+		!expected.Replay.Consume(
+			verified.Environment,
+			verified.JTI,
+			verified.RetainUntil,
+			expected.Now,
+		) {
 		return Invalid("SERVICE_AUTH_REPLAY")
 	}
 	return Eligible()

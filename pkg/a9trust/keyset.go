@@ -1,4 +1,4 @@
-package crypto
+package a9trust
 
 import (
 	"crypto/ed25519"
@@ -42,7 +42,8 @@ func ValidateKeyset(object map[string]any, pinnedRootPublic []byte, pinnedRootKe
 	}
 	expires, ok := parseWireTime(objectString(object, "expires_at"))
 	if !ok || !expires.After(issued) || expires.Sub(issued) > 24*time.Hour ||
-		(!now.IsZero() && !now.Before(expires)) {
+		(!now.IsZero() &&
+			(now.Before(issued) || !now.Before(expires))) {
 		return Inconclusive("KEY_STATE")
 	}
 	if _, verdict := positiveInteger(object["keyset_sequence"]); !verdict.IsEligible() {
@@ -71,6 +72,11 @@ func ValidateKeyset(object map[string]any, pinnedRootPublic []byte, pinnedRootKe
 	}
 	if signCounts["A9_CONTROL"] != 1 || signCounts["SERVICE_AUTH"] != 1 {
 		return Inconclusive("KEY_STATE")
+	}
+	for _, use := range []string{"A9_CONTROL", "SERVICE_AUTH"} {
+		if _, verdict := SigningKeyAt(object, use, issued); !verdict.IsEligible() {
+			return Inconclusive("KEY_STATE")
+		}
 	}
 	commitments, ok := parseCommitmentKeys(object["commitment_keys"])
 	if !ok || len(commitments) < 3 || len(commitments) > 6 || !commitmentKeysOrdered(commitments) {
@@ -202,8 +208,9 @@ func ValidateKeysetSequence(incoming map[string]any, storedSequence uint64, stor
 	return Eligible()
 }
 
-// ValidateOnlineRotation checks the two-stage A9_CONTROL rotation timing and
-// state changes between consecutive published keysets.
+// ValidateOnlineRotation checks every online signing-key change between two
+// accepted keysets. A9_CONTROL and SERVICE_AUTH rotate independently, and an
+// unchanged use does not require the other use to rotate at the same time.
 func ValidateOnlineRotation(transition, cutover map[string]any) Verdict {
 	transitionSequence, v := positiveInteger(transition["keyset_sequence"])
 	if !v.IsEligible() {
@@ -229,50 +236,209 @@ func ValidateOnlineRotation(transition, cutover map[string]any) Verdict {
 	if !ok {
 		return Inconclusive("KEY_STATE")
 	}
-	var oldSign, staged *OnlineKey
-	for i := range before {
-		key := &before[i]
-		if key.Use != "A9_CONTROL" {
-			continue
-		}
-		switch key.State {
-		case "SIGN":
-			if oldSign != nil {
-				return Inconclusive("KEY_STATE")
-			}
-			oldSign = key
-		case "VERIFY_ONLY":
-			if staged != nil {
-				return Inconclusive("KEY_STATE")
-			}
-			staged = key
-		}
-	}
-	if oldSign == nil || staged == nil ||
-		staged.NotBefore.Sub(transitionIssued) < 24*time.Hour ||
-		cutoverIssued.Before(staged.NotBefore) {
+	if cutoverIssued.Before(transitionIssued) {
 		return Inconclusive("KEY_STATE")
 	}
-	var newSign, oldVerify *OnlineKey
-	for i := range after {
-		key := &after[i]
-		if key.Use != "A9_CONTROL" {
-			continue
+	for _, use := range []string{"A9_CONTROL", "SERVICE_AUTH"} {
+		if verdict := validateOnlineRotationForUse(
+			before,
+			after,
+			use,
+			transitionIssued,
+			cutoverIssued,
+		); !verdict.IsEligible() {
+			return verdict
 		}
-		if key.KeyID == staged.KeyID && key.State == "SIGN" {
-			newSign = key
-		}
-		if key.KeyID == oldSign.KeyID && key.State == "VERIFY_ONLY" {
-			oldVerify = key
-		}
-	}
-	if newSign == nil || oldVerify == nil ||
-		!newSign.NotBefore.Equal(staged.NotBefore) ||
-		!bytesEqual(newSign.PublicKey, staged.PublicKey) ||
-		oldVerify.NotAfter.Before(cutoverIssued.Add(90*time.Second)) {
-		return Inconclusive("KEY_STATE")
 	}
 	return Eligible()
+}
+
+func validateOnlineRotationForUse(
+	before []OnlineKey,
+	after []OnlineKey,
+	use string,
+	transitionIssued time.Time,
+	cutoverIssued time.Time,
+) Verdict {
+	oldSign, ok := soleSigningKeyForUse(before, use)
+	if !ok {
+		return Inconclusive("KEY_STATE")
+	}
+	newSign, ok := soleSigningKeyForUse(after, use)
+	if !ok {
+		return Inconclusive("KEY_STATE")
+	}
+	if oldSign.KeyID == newSign.KeyID {
+		if !sameOnlineKeyMaterial(oldSign, newSign) {
+			return Inconclusive("KEY_STATE")
+		}
+		return validateVerifyOnlyContinuity(
+			before,
+			after,
+			use,
+			transitionIssued,
+			cutoverIssued,
+			"",
+			"",
+		)
+	}
+
+	staged, ok := findOnlineKey(before, use, oldSign.KeyID, newSign.KeyID)
+	if !ok ||
+		staged.State != "VERIFY_ONLY" ||
+		staged.NotBefore.Sub(transitionIssued) < 24*time.Hour ||
+		cutoverIssued.Before(staged.NotBefore) ||
+		!sameOnlineKeyMaterial(staged, newSign) {
+		return Inconclusive("KEY_STATE")
+	}
+	oldVerify, ok := findOnlineKey(after, use, newSign.KeyID, oldSign.KeyID)
+	if !ok ||
+		oldVerify.State != "VERIFY_ONLY" ||
+		!sameOnlineKeyMaterial(oldSign, oldVerify) {
+		return Inconclusive("KEY_STATE")
+	}
+
+	retention := 90 * time.Second
+	if use == "SERVICE_AUTH" {
+		// A service JWT may live for 60 seconds and remains acceptable for the
+		// five-second verifier skew. The old verifier then remains published for
+		// the contract's additional 60-second retirement interval.
+		retention = 125 * time.Second
+	}
+	if oldVerify.NotAfter.Before(cutoverIssued.Add(retention)) {
+		return Inconclusive("KEY_STATE")
+	}
+	return validateVerifyOnlyContinuity(
+		before,
+		after,
+		use,
+		transitionIssued,
+		cutoverIssued,
+		staged.KeyID,
+		oldVerify.KeyID,
+	)
+}
+
+func validateVerifyOnlyContinuity(
+	before []OnlineKey,
+	after []OnlineKey,
+	use string,
+	transitionIssued time.Time,
+	cutoverIssued time.Time,
+	promotedKeyID string,
+	retiredKeyID string,
+) Verdict {
+	for index := range before {
+		key := &before[index]
+		if key.Use != use ||
+			key.State != "VERIFY_ONLY" ||
+			key.KeyID == promotedKeyID {
+			continue
+		}
+		if key.NotBefore.After(transitionIssued) &&
+			!cutoverIssued.Before(key.NotBefore) {
+			return Inconclusive("KEY_STATE")
+		}
+		next, exists := onlineKeyByID(after, use, key.KeyID)
+		if cutoverIssued.Before(key.NotAfter) {
+			if !exists ||
+				next.State != "VERIFY_ONLY" ||
+				!sameOnlineKeyMaterial(*key, next) {
+				return Inconclusive("KEY_STATE")
+			}
+			continue
+		}
+		if exists && !sameOnlineKeyMaterial(*key, next) {
+			return Inconclusive("KEY_STATE")
+		}
+	}
+	for index := range after {
+		key := &after[index]
+		if key.Use != use ||
+			key.State != "VERIFY_ONLY" ||
+			key.KeyID == retiredKeyID {
+			continue
+		}
+		if _, existed := onlineKeyByID(before, use, key.KeyID); existed {
+			continue
+		}
+		if key.NotBefore.Sub(cutoverIssued) < 24*time.Hour {
+			return Inconclusive("KEY_STATE")
+		}
+	}
+	return Eligible()
+}
+
+func soleSigningKeyForUse(keys []OnlineKey, use string) (OnlineKey, bool) {
+	var selected *OnlineKey
+	for index := range keys {
+		key := &keys[index]
+		if key.Use != use || key.State != "SIGN" {
+			continue
+		}
+		if selected != nil {
+			return OnlineKey{}, false
+		}
+		selected = key
+	}
+	if selected == nil {
+		return OnlineKey{}, false
+	}
+	return *selected, true
+}
+
+func findOnlineKey(
+	keys []OnlineKey,
+	use string,
+	excludedKeyID string,
+	keyID string,
+) (OnlineKey, bool) {
+	var selected *OnlineKey
+	for index := range keys {
+		key := &keys[index]
+		if key.Use != use ||
+			key.KeyID == excludedKeyID ||
+			key.KeyID != keyID {
+			continue
+		}
+		if selected != nil {
+			return OnlineKey{}, false
+		}
+		selected = key
+	}
+	if selected == nil {
+		return OnlineKey{}, false
+	}
+	return *selected, true
+}
+
+func onlineKeyByID(
+	keys []OnlineKey,
+	use string,
+	keyID string,
+) (OnlineKey, bool) {
+	var selected *OnlineKey
+	for index := range keys {
+		key := &keys[index]
+		if key.Use != use || key.KeyID != keyID {
+			continue
+		}
+		if selected != nil {
+			return OnlineKey{}, false
+		}
+		selected = key
+	}
+	if selected == nil {
+		return OnlineKey{}, false
+	}
+	return *selected, true
+}
+
+func sameOnlineKeyMaterial(left, right OnlineKey) bool {
+	return left.KeyID == right.KeyID &&
+		bytesEqual(left.PublicKey, right.PublicKey) &&
+		left.NotBefore.Equal(right.NotBefore) &&
+		left.NotAfter.Equal(right.NotAfter)
 }
 
 // ValidateTopicTransition enforces the exact current/next-period handoff.
@@ -304,6 +470,78 @@ func ValidateTopicTransition(keyset map[string]any) Verdict {
 	if current == nil || next == nil ||
 		!next.NotBefore.Equal(boundary) ||
 		current.NotAfter.Before(boundary.Add(60*time.Second)) {
+		return Inconclusive("KEY_STATE")
+	}
+	return Eligible()
+}
+
+// ValidateTopicKeySchedule validates the topic descriptors usable by a
+// bridge at keyset issue time. A one-key steady state is valid. A two-key
+// state must be either current+next with the exact boundary handoff or, for
+// the first 60 seconds of a new period, previous+current with the same
+// handoff. Other epoch combinations fail closed.
+func ValidateTopicKeySchedule(keyset map[string]any) Verdict {
+	issued, ok := parseWireTime(objectString(keyset, "issued_at"))
+	if !ok {
+		return Inconclusive("KEY_STATE")
+	}
+	descriptors, ok := parseCommitmentKeys(keyset["commitment_keys"])
+	if !ok {
+		return Inconclusive("KEY_STATE")
+	}
+	var topic []CommitmentKey
+	for _, descriptor := range descriptors {
+		if descriptor.Purpose == "TOPIC" {
+			topic = append(topic, descriptor)
+		}
+	}
+	if len(topic) < 1 || len(topic) > 2 {
+		return Inconclusive("KEY_STATE")
+	}
+
+	currentEpoch := TopicEpoch(issued)
+	var current, adjacent *CommitmentKey
+	for index := range topic {
+		descriptor := &topic[index]
+		if descriptor.TopicKeyEpoch == nil {
+			return Inconclusive("KEY_STATE")
+		}
+		if *descriptor.TopicKeyEpoch == currentEpoch {
+			if current != nil {
+				return Inconclusive("KEY_STATE")
+			}
+			current = descriptor
+		} else {
+			if adjacent != nil {
+				return Inconclusive("KEY_STATE")
+			}
+			adjacent = descriptor
+		}
+	}
+	if current == nil ||
+		issued.Before(current.NotBefore) ||
+		!issued.Before(current.NotAfter) {
+		return Inconclusive("KEY_STATE")
+	}
+	if adjacent == nil {
+		return Eligible()
+	}
+
+	switch adjacentEpoch := *adjacent.TopicKeyEpoch; {
+	case adjacentEpoch == currentEpoch+1:
+		boundary := TopicEpochBoundary(adjacentEpoch)
+		if !adjacent.NotBefore.Equal(boundary) ||
+			current.NotAfter.Before(boundary.Add(60*time.Second)) {
+			return Inconclusive("KEY_STATE")
+		}
+	case currentEpoch > 0 && adjacentEpoch == currentEpoch-1:
+		boundary := TopicEpochBoundary(currentEpoch)
+		if !current.NotBefore.Equal(boundary) ||
+			adjacent.NotAfter.Before(boundary.Add(60*time.Second)) ||
+			!issued.Before(boundary.Add(60*time.Second)) {
+			return Inconclusive("KEY_STATE")
+		}
+	default:
 		return Inconclusive("KEY_STATE")
 	}
 	return Eligible()

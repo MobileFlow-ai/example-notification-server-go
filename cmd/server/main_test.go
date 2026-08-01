@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	database "github.com/xmtp/example-notification-server-go/pkg/db"
+	"github.com/xmtp/example-notification-server-go/pkg/options"
 	testdb "github.com/xmtp/example-notification-server-go/pkg/testutils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -39,6 +40,124 @@ func TestWelcomeRuntimeConfigurationIsHardClosed(t *testing.T) {
 func TestAPNSRuntimeConfigurationIsHardClosed(t *testing.T) {
 	require.True(t, apnsRuntimeConfigurationValid(false))
 	require.False(t, apnsRuntimeConfigurationValid(true))
+}
+
+func TestA9RuntimeConfigurationRejectsDisabledMaterialAndDowngrades(
+	t *testing.T,
+) {
+	require.True(t, a9RuntimeConfigurationValid(options.Options{}))
+
+	disabledWithMaterial := options.Options{}
+	disabledWithMaterial.A9.PinnedRootKeyID = "latent-key"
+	require.False(t, a9RuntimeConfigurationValid(disabledWithMaterial))
+	disabledWithInlineSecret := options.Options{}
+	disabledWithInlineSecret.A9.TopicCommitmentKeysJSON =
+		"inline-secret"
+	require.False(
+		t,
+		a9RuntimeConfigurationValid(disabledWithInlineSecret),
+	)
+
+	valid := validA9RuntimeOptions(t)
+	require.True(t, a9RuntimeConfigurationValid(valid))
+
+	for name, mutate := range map[string]func(*options.Options){
+		"vault off": func(config *options.Options) {
+			config.Vault.Enabled = false
+		},
+		"api off": func(config *options.Options) {
+			config.Api.Enabled = false
+		},
+		"listener off": func(config *options.Options) {
+			config.Xmtp.ListenerEnabled = false
+		},
+		"v3 listener": func(config *options.Options) {
+			config.Xmtp.ListenerType = "v3"
+		},
+		"legacy bearer downgrade": func(config *options.Options) {
+			config.Vault.APIBearerToken = "legacy-static-bearer"
+		},
+		"missing origin": func(config *options.Options) {
+			config.A9.KeysetOrigin = ""
+		},
+		"missing root public key": func(config *options.Options) {
+			config.A9.PinnedRootPublicKeyBase64URL = ""
+		},
+		"missing root key id": func(config *options.Options) {
+			config.A9.PinnedRootKeyID = ""
+		},
+		"missing topic key source": func(config *options.Options) {
+			config.A9.TopicCommitmentKeysFilePath = ""
+		},
+		"inline topic key downgrade": func(config *options.Options) {
+			config.A9.TopicCommitmentKeysJSON = "inline-secret"
+		},
+		"relative topic key source": func(config *options.Options) {
+			config.A9.TopicCommitmentKeysFilePath =
+				"topic-keys.json"
+		},
+		"zero timeout": func(config *options.Options) {
+			config.A9.KeysetRequestTimeoutSeconds = 0
+		},
+		"oversized timeout": func(config *options.Options) {
+			config.A9.KeysetRequestTimeoutSeconds =
+				maxA9KeysetRequestTimeoutSeconds + 1
+		},
+		"missing private bind": func(config *options.Options) {
+			config.A9.PrivateBindAddress = ""
+		},
+		"public private bind": func(config *options.Options) {
+			config.A9.PrivateBindAddress =
+				"203.0.113.8:9443"
+		},
+		"wildcard without isolation opt-in": func(config *options.Options) {
+			config.A9.PrivateBindAddress = "0.0.0.0:9443"
+		},
+		"misplaced wildcard isolation opt-in": func(config *options.Options) {
+			config.A9.AllowWildcardPrivateBind = true
+		},
+		"missing TLS certificate": func(config *options.Options) {
+			config.A9.TLSCertificateFilePath = ""
+		},
+		"missing TLS private key": func(config *options.Options) {
+			config.A9.TLSPrivateKeyFilePath = ""
+		},
+		"zero header timeout": func(config *options.Options) {
+			config.A9.ReadHeaderTimeoutSeconds = 0
+		},
+		"read below header timeout": func(config *options.Options) {
+			config.A9.ReadTimeoutSeconds =
+				config.A9.ReadHeaderTimeoutSeconds - 1
+		},
+		"oversized read timeout": func(config *options.Options) {
+			config.A9.ReadTimeoutSeconds =
+				maxA9RequestTimeoutSeconds + 1
+		},
+		"zero write timeout": func(config *options.Options) {
+			config.A9.WriteTimeoutSeconds = 0
+		},
+		"oversized idle timeout": func(config *options.Options) {
+			config.A9.IdleTimeoutSeconds =
+				maxA9IdleTimeoutSeconds + 1
+		},
+		"small header bound": func(config *options.Options) {
+			config.A9.MaxHeaderBytes = minA9HeaderBytes - 1
+		},
+		"large header bound": func(config *options.Options) {
+			config.A9.MaxHeaderBytes = maxA9HeaderBytes + 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			mutate(&candidate)
+			require.False(t, a9RuntimeConfigurationValid(candidate))
+		})
+	}
+
+	wildcard := valid
+	wildcard.A9.PrivateBindAddress = "0.0.0.0:9443"
+	wildcard.A9.AllowWildcardPrivateBind = true
+	require.True(t, a9RuntimeConfigurationValid(wildcard))
 }
 
 func TestCheckedXMTPWorkerCountRejectsInvalidAndOverflowValues(t *testing.T) {

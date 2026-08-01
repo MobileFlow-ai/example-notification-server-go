@@ -1,4 +1,4 @@
-package schema
+package a9schema
 
 import (
 	"bytes"

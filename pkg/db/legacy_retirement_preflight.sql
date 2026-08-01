@@ -550,7 +550,7 @@ checks AS (
             AND (
                 SELECT pg_catalog.count(*) = 1
                    AND COALESCE(pg_catalog.bool_and(
-                       migration.version = 11
+                       migration.version = 12
                        AND NOT migration.dirty
                    ), FALSE)
                   FROM public.schema_migrations AS migration

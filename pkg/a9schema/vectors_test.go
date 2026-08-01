@@ -1,4 +1,4 @@
-package schema
+package a9schema
 
 import (
 	"bytes"
@@ -211,7 +211,7 @@ func loadCorpus(t *testing.T) corpus {
 	if !ok {
 		t.Fatal("resolve schema test path")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
 	read := func(name string, target any) {
 		t.Helper()
 		raw, err := os.ReadFile(filepath.Join(

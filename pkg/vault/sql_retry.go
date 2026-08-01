@@ -23,6 +23,9 @@ func isSerializationFailure(err error) bool {
 // private retry loop. Every other database error is collapsed to the fixed
 // public failure so driver details cannot escape the vault.
 func storeDatabaseError(err error) error {
+	if err == nil {
+		return nil
+	}
 	if isSerializationFailure(err) {
 		return err
 	}

@@ -1,9 +1,9 @@
-// Package schema provides the strict JSON and closed-shape validation used by
-// the A9 v1 conformance mirror.
+// Package a9schema provides the strict JSON and closed-shape validation used
+// by the production A9 v1 adapter and its mirrored conformance vectors.
 //
 // It deliberately does not verify signatures, commitments, key state, stream
 // state, or vault state. Callers must apply those checks after Decode succeeds.
-package schema
+package a9schema
 
 import (
 	"errors"
@@ -46,9 +46,11 @@ const (
 	ReasonDuplicateSubscription          Reason = "DUPLICATE_SUBSCRIPTION"
 )
 
-// Object is the object representation returned by Decode. JSON numbers remain
-// json.Number values so callers do not lose their exact integer spelling.
-type Object map[string]any
+// Object is the object representation returned by Decode. It is an alias so
+// nested objects interoperate directly with the production trust verifier.
+// JSON numbers remain json.Number values so callers never lose their exact
+// integer spelling.
+type Object = map[string]any
 
 // Failure is a content-free strict-JSON or schema failure. Path identifies
 // shape location only; it never includes rejected values.

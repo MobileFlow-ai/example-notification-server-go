@@ -55,10 +55,42 @@ type VaultOptions struct {
 	MasterKeysJSON          string `long:"vault-master-keys-json" env:"BRIDGE_VAULT_MASTER_KEYS_JSON" description:"Versioned base64url 32-byte vault root keys as JSON"`
 	LookupKey               string `long:"vault-lookup-key" env:"BRIDGE_VAULT_LOOKUP_KEY" description:"Base64url 32-byte domain-separated lookup root"`
 	AuthorityPublicKeysJSON string `long:"authority-public-keys-json" env:"BRIDGE_AUTHORITY_PUBLIC_KEYS_JSON" description:"Versioned Ed25519 authority public keys as JSON"`
-	APIBearerToken          string `long:"bridge-api-bearer-token" env:"BRIDGE_API_BEARER_TOKEN" description:"Internal modern-api to bridge service credential"`
+	APIBearerToken          string `long:"bridge-api-bearer-token" env:"BRIDGE_API_BEARER_TOKEN" description:"Legacy internal service credential; rejected when A9 asymmetric service authentication is enabled"`
 	LeaseTTLHours           int    `long:"vault-lease-ttl-hours" env:"BRIDGE_VAULT_LEASE_TTL_HOURS" default:"168" description:"Authenticated subscription lease TTL, capped at 168 hours"`
 	TeenConversationMode    string `long:"bridge-teen-conversation-mode" env:"BRIDGE_TEEN_CONVERSATION_MODE" choice:"disabled" choice:"enabled" default:"disabled" description:"Enable teen XMTP conversation routing only after the required safety review"`
 	WelcomeEnabled          bool   `long:"bridge-welcome-enabled" env:"BRIDGE_WELCOME_ENABLED" description:"Compatibility flag; true is rejected because Welcome routing is unavailable in this build"`
+}
+
+type A9Options struct {
+	Enabled                      bool   `long:"a9-enabled" env:"BRIDGE_A9_ENABLED" description:"Enable the root-pinned A9 authority control plane; does not by itself enable APNS or Welcome"`
+	KeysetOrigin                 string `long:"a9-keyset-origin" env:"BRIDGE_A9_KEYSET_ORIGIN" description:"Exact private HTTPS modern-api origin used only for A9 keyset discovery"`
+	PinnedRootPublicKeyBase64URL string `long:"a9-pinned-root-public-key" env:"BRIDGE_A9_PINNED_ROOT_PUBLIC_KEY" description:"Out-of-band canonical Base64url Ed25519 A9 root public key"`
+	PinnedRootKeyID              string `long:"a9-pinned-root-key-id" env:"BRIDGE_A9_PINNED_ROOT_KEY_ID" description:"Out-of-band A9 root key ID derived from the pinned public key"`
+	TopicCommitmentKeysJSON      string `long:"a9-topic-commitment-keys-json" env:"BRIDGE_A9_TOPIC_COMMITMENT_KEYS_JSON" description:"Deprecated inline A9 TOPIC secret material; any nonempty value is rejected"`
+	TopicCommitmentKeysFilePath  string `long:"a9-topic-commitment-keys-file-path" env:"BRIDGE_A9_TOPIC_COMMITMENT_KEYS_FILE_PATH" description:"Absolute path to a restricted regular file containing bridge-only A9 TOPIC commitment key records"`
+	KeysetRequestTimeoutSeconds  int    `long:"a9-keyset-request-timeout-seconds" env:"BRIDGE_A9_KEYSET_REQUEST_TIMEOUT_SECONDS" default:"10" description:"A9 private keyset discovery timeout, from 1 through 30 seconds"`
+	PrivateBindAddress           string `long:"a9-private-bind" env:"BRIDGE_A9_PRIVATE_BIND" default:"127.0.0.1:9443" description:"Dedicated private TLS listener address for the A9 control plane"`
+	AllowWildcardPrivateBind     bool   `long:"a9-allow-wildcard-private-bind" env:"BRIDGE_A9_ALLOW_WILDCARD_PRIVATE_BIND" description:"Permit an unspecified A9 bind only after deployment-level private-network isolation is independently verified"`
+	TLSCertificateFilePath       string `long:"a9-tls-certificate-file-path" env:"BRIDGE_A9_TLS_CERTIFICATE_FILE_PATH" description:"Absolute path to the A9 private listener certificate PEM"`
+	TLSPrivateKeyFilePath        string `long:"a9-tls-private-key-file-path" env:"BRIDGE_A9_TLS_PRIVATE_KEY_FILE_PATH" description:"Absolute path to the A9 private listener key PEM"`
+	ReadHeaderTimeoutSeconds     int    `long:"a9-read-header-timeout-seconds" env:"BRIDGE_A9_READ_HEADER_TIMEOUT_SECONDS" default:"5" description:"A9 TLS listener header-read timeout"`
+	ReadTimeoutSeconds           int    `long:"a9-read-timeout-seconds" env:"BRIDGE_A9_READ_TIMEOUT_SECONDS" default:"15" description:"A9 TLS listener complete-request read timeout"`
+	WriteTimeoutSeconds          int    `long:"a9-write-timeout-seconds" env:"BRIDGE_A9_WRITE_TIMEOUT_SECONDS" default:"15" description:"A9 TLS listener response-write timeout"`
+	IdleTimeoutSeconds           int    `long:"a9-idle-timeout-seconds" env:"BRIDGE_A9_IDLE_TIMEOUT_SECONDS" default:"30" description:"A9 TLS listener keep-alive idle timeout"`
+	MaxHeaderBytes               int    `long:"a9-max-header-bytes" env:"BRIDGE_A9_MAX_HEADER_BYTES" default:"16384" description:"A9 TLS listener maximum request-header bytes"`
+}
+
+// HasTrustMaterial reports only security-sensitive A9 fields. The bounded
+// timeout has a nonzero default and therefore is not configuration material.
+func (options A9Options) HasTrustMaterial() bool {
+	return options.KeysetOrigin != "" ||
+		options.PinnedRootPublicKeyBase64URL != "" ||
+		options.PinnedRootKeyID != "" ||
+		options.TopicCommitmentKeysJSON != "" ||
+		options.TopicCommitmentKeysFilePath != "" ||
+		options.AllowWildcardPrivateBind ||
+		options.TLSCertificateFilePath != "" ||
+		options.TLSPrivateKeyFilePath != ""
 }
 
 type IncidentAccessOptions struct {
@@ -79,6 +111,7 @@ type Options struct {
 	Fcm          FcmOptions            `group:"FCM Options"`
 	HttpDelivery HttpDeliveryOptions   `group:"HTTP Delivery Options"`
 	Vault        VaultOptions          `group:"Hytch Secure Vault Options"`
+	A9           A9Options             `group:"Hytch A9 Authority Options"`
 	Incident     IncidentAccessOptions `group:"Incident Access Options"`
 
 	DbConnectionString          string `short:"d" long:"db-connection-string" env:"DB_CONNECTION_STRING" description:"Address to database"`

@@ -1,4 +1,4 @@
-package crypto
+package a9trust
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ func loadCorpus(t *testing.T) vectorCorpus {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 	read := func(name string) map[string]any {
 		t.Helper()
 		raw, err := os.ReadFile(filepath.Join(root, "contracts", "xmtp_push", "a9_adapter", "v1", "vectors", name))
