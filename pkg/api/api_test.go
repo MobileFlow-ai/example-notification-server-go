@@ -174,7 +174,10 @@ func Test_SetListenerAfterStartReturnsError(t *testing.T) {
 }
 
 func Test_StartFailsSynchronouslyWhenPortIsOccupied(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	// Match ApiServer.Prepare's wildcard bind. On macOS an IPv4-only loopback
+	// listener can coexist with the server's IPv6 wildcard listener, which
+	// makes an occupied-port test pass unexpectedly.
+	occupied, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, occupied.Close())

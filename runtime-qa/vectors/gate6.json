@@ -1,0 +1,80 @@
+[
+  {
+    "id": "conversation-explicit-true-other-sender",
+    "message_type": "conversation",
+    "should_push": true,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "other"
+  },
+  {
+    "id": "control-outer-false",
+    "message_type": "conversation",
+    "should_push": false,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "other"
+  },
+  {
+    "id": "ephemeral-outer-false",
+    "message_type": "conversation",
+    "should_push": false,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "other"
+  },
+  {
+    "id": "conversation-missing-should-push",
+    "message_type": "conversation",
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "other"
+  },
+  {
+    "id": "conversation-self-originated",
+    "message_type": "conversation",
+    "should_push": true,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "self"
+  },
+  {
+    "id": "conversation-stale-key-period",
+    "message_type": "conversation",
+    "should_push": true,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 8,
+    "sender": "other"
+  },
+  {
+    "id": "conversation-missing-sender-hmac",
+    "message_type": "conversation",
+    "should_push": true,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "missing"
+  },
+  {
+    "id": "welcome-closed",
+    "message_type": "welcome",
+    "active": true,
+    "silent": true,
+    "sender": "missing"
+  },
+  {
+    "id": "unknown-message-type",
+    "message_type": "unknown",
+    "should_push": true,
+    "active": true,
+    "expected_period": 9,
+    "key_period": 9,
+    "sender": "other"
+  }
+]
