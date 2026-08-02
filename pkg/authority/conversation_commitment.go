@@ -25,9 +25,24 @@ func ExpectedConversationCommitment(
 ) ([sha256.Size]byte, error) {
 	if !ValidEnvironment(environment) ||
 		!ValidInstallationID(installationID) ||
-		!ValidAccountIncarnationID(accountIncarnationID) {
+		!ValidAccountIncarnationID(accountIncarnationID) ||
+		!validASCIIField(expectedConversationID, 1, maxCapabilityFieldBytes) {
 		return [sha256.Size]byte{}, ErrCapabilityInvalid
 	}
+	return deriveExpectedConversationCommitment(
+		environment,
+		installationID,
+		accountIncarnationID,
+		expectedConversationID,
+	), nil
+}
+
+func deriveExpectedConversationCommitment(
+	environment string,
+	installationID string,
+	accountIncarnationID string,
+	expectedConversationID string,
+) [sha256.Size]byte {
 	values := []string{
 		environment,
 		installationID,
@@ -36,9 +51,6 @@ func ExpectedConversationCommitment(
 	}
 	size := len(expectedConversationCommitmentDomain)
 	for _, value := range values {
-		if !validASCIIField(value, 1, maxCapabilityFieldBytes) {
-			return [sha256.Size]byte{}, ErrCapabilityInvalid
-		}
 		size += 8 + len(value)
 	}
 	preimage := make([]byte, 0, size)
@@ -51,5 +63,5 @@ func ExpectedConversationCommitment(
 	for index := range preimage {
 		preimage[index] = 0
 	}
-	return commitment, nil
+	return commitment
 }

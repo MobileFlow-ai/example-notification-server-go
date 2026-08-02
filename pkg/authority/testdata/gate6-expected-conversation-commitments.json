@@ -1,0 +1,42 @@
+{
+  "a9_artifact": {
+    "commit": "b0d3aee373e78209b92ac87d6ef14af4ff8e998e",
+    "contract": "hytch.xmtp-push.a9-adapter.v1",
+    "tree_oid": "7a2c922efc813f968227066a079239ece1f011b0"
+  },
+  "algorithm": "SHA-256",
+  "domain_ascii": "Hytch expected conversation commitment v1\u0000",
+  "encoding": "domain bytes followed by each field as uint64 big-endian byte length and exact ASCII bytes",
+  "legacy_reference": {
+    "commitment_base64url": "XJjXmwBpODJFov4iwWHJIsJE06lVc0D_jOLIjlQih7w",
+    "commitment_hex": "5c98d79b0069383245a2fe22c161c922c244d3a9557340ff8ce2c88e542287bc",
+    "environment": "development",
+    "normative": false,
+    "preimage_byte_length": 120,
+    "preimage_sha256": "5c98d79b0069383245a2fe22c161c922c244d3a9557340ff8ce2c88e542287bc"
+  },
+  "normative_vectors": [
+    {
+      "commitment_base64url": "XLMgHInRTKgXol2ZJP88BB4tY0tFqX3vY34QPO_j_kg",
+      "commitment_hex": "5cb3201c89d14ca817a25d9924ff3c041e2d634b45a97def637e103cefe3fe48",
+      "environment": "dev",
+      "normative": true,
+      "preimage_byte_length": 112,
+      "preimage_sha256": "5cb3201c89d14ca817a25d9924ff3c041e2d634b45a97def637e103cefe3fe48"
+    },
+    {
+      "commitment_base64url": "Puc3AzDgYjHM9Mq-NHK3fY1o7f_WaVZuZocg1ijh9JU",
+      "commitment_hex": "3ee7370330e06231ccf4cabe3472b77d8d68edffd669566e668720d628e1f495",
+      "environment": "production",
+      "normative": true,
+      "preimage_byte_length": 119,
+      "preimage_sha256": "3ee7370330e06231ccf4cabe3472b77d8d68edffd669566e668720d628e1f495"
+    }
+  ],
+  "schema": "hytch.gate6.expected-conversation-commitment.v1",
+  "source_tuple": {
+    "account_incarnation_id": "incarnation",
+    "expected_conversation_id": "conversation",
+    "installation_id": "installation"
+  }
+}
