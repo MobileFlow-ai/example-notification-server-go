@@ -63,9 +63,10 @@ DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' poetry run alembic upgrade 
 The L4 test directory is skipped unless `RUN_XMTP_DEV_E2E=1`, so ordinary
 `pytest tests/ -q` remains network- and compose-free. With the opt-in set,
 missing runtime capability is a failure, not a skip. The service/API checks
-also require `XMTP_DEV_E2E_DATABASE_URL` and verify it connects to the fixed
-lane-only `test_modern_api_dev_e2e` database; that guard does not turn the
-service-level SQLite scenario evidence into a PostgreSQL HTTP acceptance claim.
+also require `XMTP_DEV_E2E_DATABASE_URL` and verify it is loopback-only and
+connects to the fixed lane-only `test_modern_api_dev_e2e` database; that guard
+does not turn the service-level SQLite scenario evidence into a PostgreSQL HTTP
+acceptance claim.
 
 ## Required handoff to XMTP-LANDING-TRAIN
 
