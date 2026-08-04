@@ -33,7 +33,7 @@ changed for this packet.
 | Modern-api HTTP surface | Loopback Uvicorn at detached `fc91e067` fails the opt-in OpenAPI test on directory challenge and provenance receipt routes | FAIL | `app.main` mounts only the authority router; directory and provenance are present but not registered |
 | Positive A9 HTTP authority | Not runnable | BLOCKED | Router uses `UnavailableXMTPProductConversationAuthorizer`, returning fail-closed `xmtp_product_authority_unavailable` |
 | Positive receipt HTTP issuance | Not runnable | BLOCKED | Provenance router is unmounted and its default trust dependency is unavailable |
-| Positive bridge A9 → push → APNS loop | Not runnable | BLOCKED | No checked-in compose combines secure vault, private TLS/JWS ingress, V4 listener, A9, and a permitted observable delivery boundary; APNS is hard-disabled |
+| Positive bridge A9 → push → APNS loop | Not runnable | BLOCKED | No checked-in compose combines secure vault, private TLS/JWS ingress, V4 listener, A9, and a permitted observable delivery boundary; APNS is hard-disabled. The legacy HTTP-observer integration is non-A9 and would tear down an in-use global `xnet` network / require a global `xnet-cli` install, so it is not a safe substitute |
 
 ### Commands run locally
 
@@ -94,6 +94,12 @@ Gate-6 passed. The running loopback API failed only because the three required
 directory/provenance paths are still absent. This is stronger local evidence,
 but it does not prove positive authenticated A9, receipt HTTP issuance, A9 →
 bridge delivery, XMTP consumption, or APNS.
+
+The checked-in legacy `./dev/integration` suite can observe HTTP delivery, but
+it is deliberately non-vault/non-A9. On this Mac it would also tear down the
+existing global `xnet` network and install its pinned `xnet-cli` when absent.
+L4 did not disrupt that external local state or install a global tool; neither
+action would prove the secure A9 path in any case.
 
 ## Required handoff to XMTP-LANDING-TRAIN
 
