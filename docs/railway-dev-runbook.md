@@ -8,6 +8,14 @@ the bridge image built and ran on loopback ports 15432/18080, migration
 policy verifier passed. This corrects the prior blanket statement that all
 local runtime QA was unconfirmed.
 
+That narrow pass does not establish A9 route availability. A separate
+lane-isolated vault probe currently returns no route after accepted A9 control,
+watermark, and replacement because currentness requires the assertion lease ID
+to equal a Gate-6 lease generated independently during replacement. The
+replacement request carries no assertion lease ID to establish that identity.
+This is a documented source-backed fail-closed blocker, not a test fixture to
+override; see [xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md).
+
 It changes **none** of the deployment gates below. The harness remains
 API-only with secure vault, A9, APNS, Welcome, and the XMTP listener disabled;
 it does not prove private A9 ingress, secure-vault startup, egress, or a
