@@ -23,10 +23,10 @@ All numeric limits below are provisional defaults pending measurement.
 
 This revision is **not yet authorized for A9 activation, APNS egress,
 deployment, or database retirement**. The repository contains the mirrored A9
-v1 conformance contract and dormant bridge runtime source, but local formatting,
-compile, test, database, and integration QA for that source is
-**UNCONFIRMED**. Source availability is not runtime, modern-api rollout,
-migration, client-vector, or end-to-end evidence.
+v1 conformance contract and dormant bridge runtime source, but the full secure
+runtime, modern-api integration, deployment-database, and end-to-end QA for
+that source is **UNCONFIRMED**. Source availability is not runtime,
+modern-api rollout, migration, client-vector, or end-to-end evidence.
 
 Welcome remains compiled hard-closed. The exact zero/one live provider-call
 proof also requires the versioned Gate 8 amendment and recorded Security and

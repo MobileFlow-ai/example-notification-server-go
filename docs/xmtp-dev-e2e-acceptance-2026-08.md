@@ -16,7 +16,7 @@ changed for this packet.
 | Modern-api L4 test branch | `feat/xmtp-dev-e2e-20260804` from `origin/dev` `8ee2d4f1` | New files are limited to `tests/xmtp_e2e/` |
 | Modern-api stack examined | `rechain/985` / `bd7f30aa` over current `origin/dev` | Not a valid merge-preview candidate; see blockers below |
 | Bridge database | Compose-owned `bridge_runtime_qa` on `127.0.0.1:15432` | Dedicated and torn down after QA |
-| Modern-api database | `test_modern_api_dev_e2e` on a dedicated disposable local Postgres at `127.0.0.1:15433` | Lane-unique scratch database; never a shared `modern_api` database |
+| Modern-api database | `test_modern_api_dev_e2e` on a dedicated disposable local Postgres at `127.0.0.1:15433` | Lane-unique scratch database; the opt-in harness connects and asserts this exact name before service/API checks, never a shared `modern_api` database |
 
 ## Per-scenario acceptance record
 
@@ -41,6 +41,13 @@ make runtime-qa-up
 BRIDGE_TEST_DSN='<local bridge_runtime_qa DSN>' \
   go test -buildvcs=false -mod=readonly -p 1 -count=1 ./...
 
+# Scripted authority/directory/challenge/receipt service lane. The harness
+# fails before running if this is not the fixed L4 scratch database.
+RUN_XMTP_DEV_E2E=1 \
+  XMTP_DEV_E2E_DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' \
+  poetry run pytest -q \
+    tests/xmtp_e2e/test_dev_loop.py::test_scripted_clients_exercise_core_service_contracts
+
 # L4 harness checks the loopback bridge health contract and Gate-6 output.
 RUN_XMTP_DEV_E2E=1 \
   XMTP_DEV_E2E_BRIDGE_URL=http://127.0.0.1:18080 \
@@ -55,7 +62,10 @@ DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' poetry run alembic upgrade 
 
 The L4 test directory is skipped unless `RUN_XMTP_DEV_E2E=1`, so ordinary
 `pytest tests/ -q` remains network- and compose-free. With the opt-in set,
-missing runtime capability is a failure, not a skip.
+missing runtime capability is a failure, not a skip. The service/API checks
+also require `XMTP_DEV_E2E_DATABASE_URL` and verify it connects to the fixed
+lane-only `test_modern_api_dev_e2e` database; that guard does not turn the
+service-level SQLite scenario evidence into a PostgreSQL HTTP acceptance claim.
 
 ## Required handoff to XMTP-LANDING-TRAIN
 
