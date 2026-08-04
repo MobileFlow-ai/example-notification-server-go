@@ -14,7 +14,8 @@ changed for this packet.
 | --- | --- | --- |
 | Bridge runtime QA | `c1ea4f1` (`feat/xmtp-bridge-a9-runtime-wiring-20260801`) | PASS at the checked-in 15432/18080 harness scope |
 | Modern-api L4 test branch | `feat/xmtp-dev-e2e-20260804` from `origin/dev` `8ee2d4f1` | New files are limited to `tests/xmtp_e2e/` |
-| Modern-api stack examined | `rechain/985` / `bd7f30aa` over current `origin/dev` | Not a valid merge-preview candidate; see blockers below |
+| Historical modern-api diagnostic | `rechain/985` / `bd7f30aa` over then-current `origin/dev` | Multiple-head migration failure; retained below as historical evidence |
+| Current modern-api preview | Exact detached draft #987 tip `fc91e067` | One head and `upgrade head` PASS; composed lane is 3 PASS / 1 FAIL |
 | Bridge database | Compose-owned `bridge_runtime_qa` on `127.0.0.1:15432` | Dedicated and torn down after QA |
 | Modern-api database | `test_modern_api_dev_e2e` on a dedicated disposable local Postgres at `127.0.0.1:15433` | Lane-unique scratch database; the opt-in harness connects and asserts this exact name before service/API checks, never a shared `modern_api` database |
 
@@ -27,8 +28,9 @@ changed for this packet.
 | Directory challenge recovery | Owner resets a failed challenge; a different session/incarnation is rejected and leaves state unchanged | PASS | Service-level fake DB/adapter; `requeue_failed_challenge` has no HTTP route |
 | Receipt issuance | HSM-shaped receipt issue and same-principal replay produce one persisted operation; conflicting session/signature is rejected | PASS | Service-level SQLite/fake-trust test; no live remote HSM or mounted HTTP router |
 | Bridge push policy | `livez`, `readyz`, migration `12|false`, serial `go test -p 1 ./...`, and payload-free Gate-6 verifier | PASS | API-only V4 bridge. Explicit-true non-self conversation is admitted once; control, ephemeral, self, stale, missing-HMAC, Welcome, and unknown cases deny. No XMTP listener, A9 private ingress, APNS, or device delivery |
-| Modern-api migration gate | `alembic heads` reports `245_web_analytics_counters` and `250_xmtp_receipt_issuance_operations`; `alembic upgrade head` rejects multiple heads | FAIL | Current stack must be re-chained/re-slotted by XMTP-LANDING-TRAIN before any real merge-preview/database acceptance |
-| Modern-api HTTP surface | App OpenAPI includes authority routes but lacks directory challenge and provenance receipt routes | FAIL | `app.main` mounts only the authority router; directory and provenance are present but not registered |
+| Historical migration diagnostic | `rechain/985` reported `245_web_analytics_counters` and `250_xmtp_receipt_issuance_operations`; `alembic upgrade head` rejected multiple heads | FAIL (historical) | The later candidate below replaces this as the current migration evidence, not as an E2E acceptance |
+| Modern-api migration gate | Detached `fc91e067`: `alembic heads` and `alembic current` both report `253_xmtp_recovery_capsule_authority`; `alembic upgrade head` succeeds | PASS | Applied only to the disposable L4 Postgres; no Railway or shared database was touched |
+| Modern-api HTTP surface | Loopback Uvicorn at detached `fc91e067` fails the opt-in OpenAPI test on directory challenge and provenance receipt routes | FAIL | `app.main` mounts only the authority router; directory and provenance are present but not registered |
 | Positive A9 HTTP authority | Not runnable | BLOCKED | Router uses `UnavailableXMTPProductConversationAuthorizer`, returning fail-closed `xmtp_product_authority_unavailable` |
 | Positive receipt HTTP issuance | Not runnable | BLOCKED | Provenance router is unmounted and its default trust dependency is unavailable |
 | Positive bridge A9 → push → APNS loop | Not runnable | BLOCKED | No checked-in compose combines secure vault, private TLS/JWS ingress, V4 listener, A9, and a permitted observable delivery boundary; APNS is hard-disabled |
@@ -45,6 +47,7 @@ BRIDGE_TEST_DSN='<local bridge_runtime_qa DSN>' \
 # fails before running if this is not the fixed L4 scratch database.
 RUN_XMTP_DEV_E2E=1 \
   XMTP_DEV_E2E_DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' \
+  XMTP_DEV_E2E_STACK_ROOT='<detached L2 merge-preview worktree>' \
   poetry run pytest -q \
     tests/xmtp_e2e/test_dev_loop.py::test_scripted_clients_exercise_core_service_contracts
 
@@ -58,6 +61,16 @@ RUN_XMTP_DEV_E2E=1 \
 # Current stack diagnostic against the L4-only scratch database
 DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' poetry run alembic heads
 DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' poetry run alembic upgrade head
+
+# Fully composed local lane: detached preview + scratch DB + bridge + loopback API.
+# At `fc91e067` this intentionally finishes 3 PASS / 1 FAIL on the missing routes.
+RUN_XMTP_DEV_E2E=1 \
+  XMTP_DEV_E2E_DATABASE_URL='<test_modern_api_dev_e2e asyncpg DSN>' \
+  XMTP_DEV_E2E_STACK_ROOT='<detached L2 merge-preview worktree>' \
+  XMTP_DEV_E2E_BRIDGE_URL=http://127.0.0.1:18080 \
+  XMTP_DEV_E2E_BRIDGE_ROOT='<bridge worktree>' \
+  XMTP_DEV_E2E_API_URL=http://127.0.0.1:18081 \
+  poetry run pytest -q tests/xmtp_e2e/test_dev_loop.py
 ```
 
 The L4 test directory is skipped unless `RUN_XMTP_DEV_E2E=1`, so ordinary
@@ -66,34 +79,37 @@ missing runtime capability is a failure, not a skip. The service/API checks
 also require `XMTP_DEV_E2E_DATABASE_URL` and verify it is loopback-only and
 connects to the fixed lane-only `test_modern_api_dev_e2e` database; that guard
 does not turn the service-level SQLite scenario evidence into a PostgreSQL HTTP
-acceptance claim.
+acceptance claim. The scripted service test additionally uses
+`XMTP_DEV_E2E_STACK_ROOT` to execute the target preview's scenarios without
+copying any test files into the stack worktree.
 
-### Subsequent L2 readiness signal (not an acceptance rerun)
+### Stable L2 preview rerun (still not accepted)
 
-After the recorded local run, read-only inspection of the exact remote L2 tip
-`74aa7e6e` (draft PR #987) found a migration ancestry that statically resolves
-to one head, `253_xmtp_recovery_capsule_authority`, rooted in the current dev
-lineage. This is progress over the historical `rechain/985` diagnostic, but it
-does not turn the migration row above into a PASS: L4 has not run that moving
-train in an isolated preview. The same exact tip still imports and mounts only
-the authority router in `app.main`; directory challenge and provenance receipt
-paths remain absent, so the HTTP acceptance still cannot pass.
+After a 30-minute quiet claim window, L4 created a detached preview of exact
+remote draft #987 tip `fc91e067`. The real lane database migrated to
+`253_xmtp_recovery_capsule_authority`, then the fully composed opt-in suite
+completed **3 passed, 1 failed**: scratch-DB isolation, scripted
+authority/directory/challenge/receipt service scenarios, and bridge health /
+Gate-6 passed. The running loopback API failed only because the three required
+directory/provenance paths are still absent. This is stronger local evidence,
+but it does not prove positive authenticated A9, receipt HTTP issuance, A9 →
+bridge delivery, XMTP consumption, or APNS.
 
 ## Required handoff to XMTP-LANDING-TRAIN
 
 L4 did not modify a stack branch. Before this packet can be rerun as a true
 end-to-end acceptance, L2 must publish a stable merge-preview that:
 
-1. retains a verified single Alembic head when actually run against the L4
-   scratch database (the static `74aa7e6e` signal is not a substitute);
+1. retains the verified single Alembic head when it publishes the next stable
+   candidate;
 2. mounts the directory and provenance routers, then proves the six required
    OpenAPI paths from the running stack;
 3. wires a real product authority and directory/provenance runtime adapters,
    the corresponding HTTP routers under their explicit dark-by-default gates.
 
 The known #988 `.claude/scratch/` contamination must also be removed from its
-history before it can be considered. L4 deliberately excluded #988/#987 from
-executable preview work to avoid retaining or inspecting those artifacts.
+history before the train can be accepted. The detached `fc91e067` rerun did
+not inspect those artifacts; it must not be treated as their clearance.
 
 ## Railway dev deploy preparation
 
