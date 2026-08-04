@@ -1,5 +1,20 @@
 # Hytch XMTP Push Bridge — Railway Dev Runbook
 
+## 2026-08-04 L4 local-evidence correction
+
+The dedicated local runtime-QA harness is now confirmed at its narrow scope:
+the bridge image built and ran on loopback ports 15432/18080, migration
+`12|false`, health probes, the serial Go suite, and the payload-free Gate-6
+policy verifier passed. This corrects the prior blanket statement that all
+local runtime QA was unconfirmed.
+
+It changes **none** of the deployment gates below. The harness remains
+API-only with secure vault, A9, APNS, Welcome, and the XMTP listener disabled;
+it does not prove private A9 ingress, secure-vault startup, egress, or a
+modern-api-to-bridge loop. The current full acceptance and human-only deploy
+packet is [xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md).
+Do not deploy until its explicit blockers are closed.
+
 This runbook is internal and applies only to Railway `dev`, XMTP dev, and the
 APNS sandbox. It does not authorize a production or public-cohort deployment.
 All numeric limits below are provisional defaults pending measurement.
