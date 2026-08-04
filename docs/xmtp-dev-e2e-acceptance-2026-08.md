@@ -68,18 +68,27 @@ connects to the fixed lane-only `test_modern_api_dev_e2e` database; that guard
 does not turn the service-level SQLite scenario evidence into a PostgreSQL HTTP
 acceptance claim.
 
+### Subsequent L2 readiness signal (not an acceptance rerun)
+
+After the recorded local run, read-only inspection of the exact remote L2 tip
+`74aa7e6e` (draft PR #987) found a migration ancestry that statically resolves
+to one head, `253_xmtp_recovery_capsule_authority`, rooted in the current dev
+lineage. This is progress over the historical `rechain/985` diagnostic, but it
+does not turn the migration row above into a PASS: L4 has not run that moving
+train in an isolated preview. The same exact tip still imports and mounts only
+the authority router in `app.main`; directory challenge and provenance receipt
+paths remain absent, so the HTTP acceptance still cannot pass.
+
 ## Required handoff to XMTP-LANDING-TRAIN
 
 L4 did not modify a stack branch. Before this packet can be rerun as a true
-end-to-end acceptance, L2 must publish a new linear merge-preview that:
+end-to-end acceptance, L2 must publish a stable merge-preview that:
 
-1. rebases/rechains the 244–252 lineage from current `origin/dev`, resolves
-   the `245_web_analytics_counters` collision, and restores one Alembic head;
-2. resolves the current dev integration conflicts in config, main, model,
-   retention, and retention-test files;
-3. splits the currently identical #963/#983 heads and makes the intended tail
-   linear; and
-4. wires a real product authority, directory/provenance runtime adapters, and
+1. retains a verified single Alembic head when actually run against the L4
+   scratch database (the static `74aa7e6e` signal is not a substitute);
+2. mounts the directory and provenance routers, then proves the six required
+   OpenAPI paths from the running stack;
+3. wires a real product authority and directory/provenance runtime adapters,
    the corresponding HTTP routers under their explicit dark-by-default gates.
 
 The known #988 `.claude/scratch/` contamination must also be removed from its
