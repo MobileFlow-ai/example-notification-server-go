@@ -210,10 +210,34 @@ commit `f401b42`:
 
 The default runtime QA (`make runtime-qa`) never runs these — that is why
 every recorded "suite green" is true and yet the A9 delivery path is
-unproven. Failure modes differ across the eight (`delivery job invalid` at
-enqueue, `subscription vault unavailable` at routing, empty route snapshots,
-an FK violation), so this is not one bad predicate; the repair needs a
-dedicated fix lane with cross-agent review, and its acceptance is exactly:
-the full `pkg/vault` suite green with `VAULT_INTEGRATION_TESTS=1`. None of
-this affects the blocked-audit-mode deploy this plan covers (A9 disabled;
-these code paths are unreachable).
+unproven. None of this affects the blocked-audit-mode deploy this plan
+covers (A9 disabled; these code paths are unreachable).
+
+**2026-08-07 update — repair delivered as draft PR #7** (one commit on top
+of #3's head; cross-agent review required before merge). Root causes, per
+an instrumented three-way investigation and a four-lens adversarial
+verification pass (0 refuted, 0 blocking findings):
+
+1. Production defect: `loadA9CurrentAssertionTx` constrained
+   `a9_assertions.lease_id` (the assertion's modern-api roster-lease
+   reference) to equal the route's bridge-generated Gate-6 lease — disjoint
+   namespaces, unsatisfiable by construction; in A9 mode this denies 100%
+   of egress. This confirms and sharpens the lease-identity diagnosis in
+   [xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md):
+   the join was a genuine code defect to repair, not a fail-closed check to
+   preserve — no contract sentence ties the two leases, and the
+   route→assertion linkage is enforced by `assertion_hash`, ten identity
+   predicates, and migration 00012's 11-column composite FK.
+2. Fixture defect: `topic_key_epoch` pinned to `7` (the Aug-1970 period)
+   against the live DB clock; the store's contract-aligned wall-clock epoch
+   gates correctly rejected the data.
+3. Test-tamper defect: the stable-identity tamper rewrote the identity
+   parent-only — a state production cannot produce; migration 00012's FK
+   correctly blocks it as tamper resistance.
+
+With PR #7, the full `pkg/vault` suite is green under
+`VAULT_INTEGRATION_TESTS=1` for the first time at any recorded head, the
+whole-repo opt-in suite is green, and `make runtime-qa` passes end-to-end
+at the fix head. A9-mode activation remains blocked on the checklist items
+above (landed producer, key ceremonies, authorized E2E gate) — but no
+longer on a red bridge CAS surface once #7 lands with cross-agent review.
