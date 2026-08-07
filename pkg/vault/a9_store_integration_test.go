@@ -77,6 +77,19 @@ func canonicalGate6JSON(t *testing.T, value any) []byte {
 	return canonical
 }
 
+// assertionIssuedAt is the issuance instant shared by every fixture
+// assertion. The contract pins topic_key_epoch to the issued_at instant
+// (floor(unix_seconds(issued_at) / 2592000)), so every fixture epoch must
+// derive from this same instant or a run near a 30-day boundary produces
+// contract-skewed data.
+func (fixture *a9RuntimeFixture) assertionIssuedAt() time.Time {
+	return fixture.now.Add(-time.Second)
+}
+
+func (fixture *a9RuntimeFixture) topicKeyEpoch() uint32 {
+	return a9trust.TopicEpoch(fixture.assertionIssuedAt())
+}
+
 func (fixture *a9RuntimeFixture) replaceRequest(
 	t *testing.T,
 	seed byte,
@@ -151,7 +164,7 @@ func (fixture *a9RuntimeFixture) replaceRequest(
 			BindingVersion:          1,
 			AssertionHash:           assertionHash,
 			TopicBinding:            topicBinding,
-			TopicKeyEpoch:           7,
+			TopicKeyEpoch:           fixture.topicKeyEpoch(),
 			RouteKeyEpoch:           subscription.RouteKeyEpoch,
 			Topic:                   topicBytes,
 			TransportConversationID: transport,
@@ -199,12 +212,13 @@ func (fixture *a9RuntimeFixture) insertKeyset(t *testing.T) {
 		) VALUES
 		    (1,1,1,$1,NULL,$4,$5),
 		    (1,1,2,$2,NULL,$4,$5),
-		    (1,1,3,$3,7,$4,$5)`,
+		    (1,1,3,$3,$6,$4,$5)`,
 		fixture.rosterKeyID[:],
 		fixture.tupleKeyID[:],
 		fixture.topicKeyID[:],
 		fixture.now,
 		fixture.now.Add(time.Hour),
+		int64(fixture.topicKeyEpoch()),
 	)
 	require.NoError(t, err)
 	_, err = fixture.db.ExecContext(t.Context(), `
@@ -247,7 +261,7 @@ func (fixture *a9RuntimeFixture) control(
 		ExpectedBindingVersion:   version - 1,
 		Action:                   action,
 		AssertionHash:            assertionHash,
-		IssuedAt:                 fixture.now.Add(-time.Second),
+		IssuedAt:                 fixture.assertionIssuedAt(),
 		ExpiresAt:                fixture.now.Add(25 * time.Second),
 		SigningKeyID:             fixture.signingKeyID,
 		SignedObjectHash:         signedHash,
@@ -277,7 +291,7 @@ func (fixture *a9RuntimeFixture) control(
 		RosterCommitment:       roster,
 		RosterCommitmentKeyID:  fixture.rosterKeyID,
 		TopicBinding:           topicBinding,
-		TopicKeyEpoch:          7,
+		TopicKeyEpoch:          fixture.topicKeyEpoch(),
 		TopicCommitmentKeyID:   fixture.topicKeyID,
 		ConversationGeneration: 1,
 		RosterVersion:          1,

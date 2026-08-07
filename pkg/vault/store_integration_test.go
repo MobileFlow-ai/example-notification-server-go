@@ -687,8 +687,18 @@ func TestAdvancePolicyFailsClosedOnStoredEnvironmentOrIdentityMismatch(
 			mutateArg: environmentProduction,
 		},
 		{
-			name:      "stable identity",
-			mutateSQL: `UPDATE hytch_push_vault.installation_states SET installation_identity = $1`,
+			// Migration 00012's subscription_leases FK deliberately
+			// blocks a parent-only identity rewrite, and production
+			// identity is an immutable keyed digest, so the tamper
+			// must corrupt both tables in one statement to model
+			// coordinated storage corruption.
+			name: "stable identity",
+			mutateSQL: `WITH lease_tamper AS (
+				UPDATE hytch_push_vault.subscription_leases
+				   SET installation_identity = $1
+			)
+			UPDATE hytch_push_vault.installation_states
+			   SET installation_identity = $1`,
 			mutateArg: bytes.Repeat([]byte{0xff}, sha256.Size),
 		},
 	} {
