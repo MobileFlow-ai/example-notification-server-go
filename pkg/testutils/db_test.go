@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+func TestTestDSNUsesRuntimeQAOverride(t *testing.T) {
+	override := "postgres://runtime-qa@127.0.0.1:15432/bridge_runtime_qa"
+	t.Setenv("BRIDGE_TEST_DSN", override)
+	if actual := testDSN(); actual != override {
+		t.Fatalf("test DSN = %q, want override %q", actual, override)
+	}
+}
+
+func TestTestDSNDefaultsToHistoricalPort(t *testing.T) {
+	t.Setenv("BRIDGE_TEST_DSN", "")
+	if actual := testDSN(); actual != defaultTestDSN {
+		t.Fatalf("test DSN = %q, want default %q", actual, defaultTestDSN)
+	}
+}
+
 func TestFormatDatabaseNamePreservesUniqueSuffixWithinPostgresLimit(
 	t *testing.T,
 ) {

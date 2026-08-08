@@ -416,3 +416,154 @@ func TestDeliveryAuthorizationBindsPreviouslyOmittedFields(t *testing.T) {
 		})
 	}
 }
+
+func requestWithA9Route() interfaces.SendRequest {
+	request := fullRequest()
+	snapshot := &interfaces.A9RouteSnapshot{
+		SubscriptionGeneration:  1,
+		BindingVersion:          2,
+		AssertionStreamSequence: 3,
+		AssertionExpiresAt:      time.Unix(500, 600).UTC(),
+		TopicKeyEpoch:           4,
+		RouteKeyEpoch:           5,
+		KeysetSequence:          6,
+		WatermarkSequence:       7,
+	}
+	copy(snapshot.InstallationBindingID[:], bytes.Repeat([]byte{0x11}, 16))
+	copy(snapshot.SequencerEpoch[:], bytes.Repeat([]byte{0x12}, 16))
+	copy(snapshot.BindingID[:], bytes.Repeat([]byte{0x13}, 16))
+	copy(snapshot.AssertionHash[:], bytes.Repeat([]byte{0x14}, 32))
+	copy(snapshot.TopicBinding[:], bytes.Repeat([]byte{0x15}, 32))
+	copy(snapshot.KeysetHash[:], bytes.Repeat([]byte{0x16}, 32))
+	request.Subscription.SecureRoute = &interfaces.SecureRoute{
+		A9: snapshot,
+	}
+	return request
+}
+
+func TestDeliveryAuthorizationBindsEveryA9RouteField(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*interfaces.A9RouteSnapshot)
+	}{
+		{
+			name: "installation binding",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.InstallationBindingID[0] ^= 0xff
+			},
+		},
+		{
+			name: "sequencer epoch",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.SequencerEpoch[0] ^= 0xff
+			},
+		},
+		{
+			name: "subscription generation",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.SubscriptionGeneration++
+			},
+		},
+		{
+			name: "binding id",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.BindingID[0] ^= 0xff
+			},
+		},
+		{
+			name: "binding version",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.BindingVersion++
+			},
+		},
+		{
+			name: "assertion hash",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.AssertionHash[0] ^= 0xff
+			},
+		},
+		{
+			name: "assertion stream sequence",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.AssertionStreamSequence++
+			},
+		},
+		{
+			name: "assertion expiry",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.AssertionExpiresAt = snapshot.
+					AssertionExpiresAt.Add(time.Nanosecond)
+			},
+		},
+		{
+			name: "topic key epoch",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.TopicKeyEpoch++
+			},
+		},
+		{
+			name: "topic binding",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.TopicBinding[0] ^= 0xff
+			},
+		},
+		{
+			name: "route key epoch",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.RouteKeyEpoch++
+			},
+		},
+		{
+			name: "keyset sequence",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.KeysetSequence++
+			},
+		},
+		{
+			name: "keyset hash",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.KeysetHash[0] ^= 0xff
+			},
+		},
+		{
+			name: "watermark sequence",
+			mutate: func(snapshot *interfaces.A9RouteSnapshot) {
+				snapshot.WatermarkSequence++
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := requestWithA9Route()
+			ctx, allowed := AuthorizeDelivery(t.Context(), request)
+			require.True(t, allowed)
+
+			mutated := request
+			route := *request.Subscription.SecureRoute
+			snapshot := *route.A9
+			route.A9 = &snapshot
+			mutated.Subscription.SecureRoute = &route
+			test.mutate(mutated.Subscription.SecureRoute.A9)
+
+			require.NotEqual(
+				t,
+				requestFingerprint(request),
+				requestFingerprint(mutated),
+			)
+			require.False(t, AllowsDelivery(ctx, mutated))
+			require.True(t, AllowsDelivery(ctx, request))
+		})
+	}
+
+	request := requestWithA9Route()
+	mutated := request
+	route := *request.Subscription.SecureRoute
+	route.A9 = nil
+	mutated.Subscription.SecureRoute = &route
+	require.NotEqual(
+		t,
+		requestFingerprint(request),
+		requestFingerprint(mutated),
+	)
+}

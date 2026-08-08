@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -15,11 +16,22 @@ import (
 	database "github.com/xmtp/example-notification-server-go/pkg/db"
 )
 
-const TEST_DSN = "postgres://postgres:xmtp@localhost:25432/postgres?sslmode=disable"
+const defaultTestDSN = "postgres://postgres:xmtp@localhost:25432/postgres?sslmode=disable"
+
+// TEST_DSN keeps the historical exported test seam while allowing isolated
+// runtime-QA compositions to select a non-default host port and database.
+var TEST_DSN = testDSN()
 
 const postgresIdentifierMaxBytes = 63
 
 var dbNameSanitizer = regexp.MustCompile(`[^a-z0-9_]+`)
+
+func testDSN() string {
+	if value := os.Getenv("BRIDGE_TEST_DSN"); value != "" {
+		return value
+	}
+	return defaultTestDSN
+}
 
 func CreateTestDb(t *testing.T) *sql.DB {
 	t.Helper()

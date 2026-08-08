@@ -174,7 +174,10 @@ func Test_SetListenerAfterStartReturnsError(t *testing.T) {
 }
 
 func Test_StartFailsSynchronouslyWhenPortIsOccupied(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	// Match ApiServer.Prepare's wildcard bind. On macOS an IPv4-only loopback
+	// listener can coexist with the server's IPv6 wildcard listener, which
+	// makes an occupied-port test pass unexpectedly.
+	occupied, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, occupied.Close())
@@ -803,6 +806,58 @@ func Test_XMTPHealth_IsIndependentFromAggregateReadiness(t *testing.T) {
 
 type secureMountBackend struct {
 	welcomeCalls int
+}
+
+func TestDisableLegacyMutationAPIClosesConnectMethodsWithoutMountingHandler(
+	t *testing.T,
+) {
+	server := NewApiServer(
+		testutils.TestLogger(t),
+		options.ApiOptions{},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV4,
+	)
+
+	server.DisableLegacyMutationAPI()
+	server.DisableLegacyMutationAPI()
+	backend := &secureMountBackend{}
+	handler, err := registration.NewHandler(
+		backend,
+		"0123456789abcdef0123456789abcdef",
+	)
+	require.NoError(t, err)
+	server.EnableSecureRegistration(handler)
+
+	require.True(t, server.secureMode)
+	require.True(t, server.legacyMutationAPIDisabled)
+	require.Nil(t, server.secureRefresh)
+
+	_, err = server.RegisterInstallation(
+		t.Context(),
+		connect.NewRequest(&proto.RegisterInstallationRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.DeleteInstallation(
+		t.Context(),
+		connect.NewRequest(&proto.DeleteInstallationRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.Subscribe(
+		t.Context(),
+		connect.NewRequest(&proto.SubscribeRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.Unsubscribe(
+		t.Context(),
+		connect.NewRequest(&proto.UnsubscribeRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = server.SubscribeWithMetadata(
+		t.Context(),
+		connect.NewRequest(&proto.SubscribeWithMetadataRequest{}),
+	)
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }
 
 func (b *secureMountBackend) Refresh(

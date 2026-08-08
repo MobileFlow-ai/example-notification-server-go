@@ -1,0 +1,9 @@
+{"case":"conversation-explicit-true-other-sender","authorized":true,"first_consume":true,"second_consume":false}
+{"case":"control-outer-false","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"ephemeral-outer-false","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"conversation-missing-should-push","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"conversation-self-originated","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"conversation-stale-key-period","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"conversation-missing-sender-hmac","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"welcome-closed","authorized":false,"first_consume":false,"second_consume":false}
+{"case":"unknown-message-type","authorized":false,"first_consume":false,"second_consume":false}

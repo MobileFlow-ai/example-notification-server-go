@@ -38,7 +38,7 @@ func TestSerializedDeliveryJobRejectsExactAPNSBoundary(t *testing.T) {
 
 func validSerializedA9Job(now time.Time) SerializedDeliveryJob {
 	snapshot := &interfaces.A9RouteSnapshot{
-		SubscriptionGeneration: 1,
+		SubscriptionGeneration:  1,
 		BindingVersion:          2,
 		AssertionStreamSequence: 3,
 		AssertionExpiresAt:      now.Add(time.Minute),
@@ -306,10 +306,10 @@ func TestA9DeliveryStillCurrentUsesStrictFinalDatabaseBoundary(t *testing.T) {
 	))
 
 	for _, test := range []struct {
-		name          string
-		jobExpiresAt  time.Time
+		name           string
+		jobExpiresAt   time.Time
 		gate6ExpiresAt time.Time
-		route         a9CurrentRouteState
+		route          a9CurrentRouteState
 	}{
 		{
 			name:           "job exact expiry",

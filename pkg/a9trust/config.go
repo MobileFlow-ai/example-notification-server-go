@@ -60,9 +60,9 @@ type TopicBindingCandidate struct {
 }
 
 type topicKeyRecord struct {
-	descriptor  TopicKeyDescriptor
-	key         []byte
-	retireAt    time.Time
+	descriptor   TopicKeyDescriptor
+	key          []byte
+	retireAt     time.Time
 	hardRetireAt time.Time
 }
 
@@ -722,8 +722,8 @@ func (set *TopicKeySet) scheduleRetirementLocked(now time.Time) {
 	steadyNow := set.steadyNow()
 	set.initializeRetirementDeadlinesLocked(now, steadyNow)
 	var (
-		retireEpoch uint32
-		retireAt    time.Time
+		retireEpoch  uint32
+		retireAt     time.Time
 		hardRetireAt time.Time
 	)
 	for index := range set.records {

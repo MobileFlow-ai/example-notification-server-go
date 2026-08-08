@@ -27,20 +27,21 @@ import (
 )
 
 type ApiServer struct {
-	logger         *zap.Logger
-	installations  interfaces.Installations
-	subscriptions  interfaces.Subscriptions
-	httpServer     *http.Server
-	port           int
-	listener       net.Listener
-	prepared       bool
-	listenerType   interfaces.ListenerType
-	readyCheck     func() bool
-	xmtpReadyCheck func() bool
-	secureRefresh  *registration.Handler
-	secureMode     bool
-	failureOnce    sync.Once
-	failed         chan struct{}
+	logger                    *zap.Logger
+	installations             interfaces.Installations
+	subscriptions             interfaces.Subscriptions
+	httpServer                *http.Server
+	port                      int
+	listener                  net.Listener
+	prepared                  bool
+	listenerType              interfaces.ListenerType
+	readyCheck                func() bool
+	xmtpReadyCheck            func() bool
+	secureRefresh             *registration.Handler
+	secureMode                bool
+	legacyMutationAPIDisabled bool
+	failureOnce               sync.Once
+	failed                    chan struct{}
 }
 
 var ErrAPIUnavailable = errors.New("api server unavailable")
@@ -104,8 +105,24 @@ func (s *ApiServer) SetXMTPReadyCheck(readyCheck func() bool) {
 }
 
 func (s *ApiServer) EnableSecureRegistration(handler *registration.Handler) {
+	if s == nil || s.legacyMutationAPIDisabled {
+		return
+	}
 	s.secureMode = true
 	s.secureRefresh = handler
+}
+
+// DisableLegacyMutationAPI irreversibly closes the public Connect
+// installation/subscription mutation methods without mounting any replacement
+// handler. A9 uses this boundary because its only authority ingress belongs on
+// the dedicated private TLS listener.
+func (s *ApiServer) DisableLegacyMutationAPI() {
+	if s == nil {
+		return
+	}
+	s.secureMode = true
+	s.secureRefresh = nil
+	s.legacyMutationAPIDisabled = true
 }
 
 func (s *ApiServer) Start() error {

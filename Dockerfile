@@ -15,7 +15,7 @@ ARG XMTP_GO_CLIENT_VERSION=unknown
 RUN go build \
     -o bin/notifications-server \
     -ldflags="-X 'main.GitCommit=$GIT_COMMIT' -X 'main.XMTPGoClientVersion=$XMTP_GO_CLIENT_VERSION'" \
-    cmd/server/main.go
+    ./cmd/server
 
 # ACTUAL IMAGE -------------------------------------------------------
 

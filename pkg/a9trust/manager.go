@@ -246,19 +246,19 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	}
 
 	manager := &Manager{
-		environment:   options.Environment,
-		origin:        options.Origin,
-		rootPin:       options.RootPin,
-		topicKeys:     options.TopicKeys,
-		store:         options.Store,
-		client:        client,
-		timeout:       timeout,
-		clock:         clock,
-		latchWake:     make(chan struct{}, 1),
-		latchStop:     make(chan struct{}),
-		latchDone:     make(chan struct{}),
-		latchRetryMin: latchRetryMinimum,
-		latchRetryMax: latchRetryMaximum,
+		environment:      options.Environment,
+		origin:           options.Origin,
+		rootPin:          options.RootPin,
+		topicKeys:        options.TopicKeys,
+		store:            options.Store,
+		client:           client,
+		timeout:          timeout,
+		clock:            clock,
+		latchWake:        make(chan struct{}, 1),
+		latchStop:        make(chan struct{}),
+		latchDone:        make(chan struct{}),
+		latchRetryMin:    latchRetryMinimum,
+		latchRetryMax:    latchRetryMaximum,
 		contextCloseDone: make(chan struct{}),
 	}
 	go manager.runLatchRetry()

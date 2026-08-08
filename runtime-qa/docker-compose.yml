@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: bridge_runtime_qa
+      POSTGRES_PASSWORD: xmtp_runtime_qa
+      POSTGRES_USER: bridge_runtime_qa
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U bridge_runtime_qa -d bridge_runtime_qa
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "127.0.0.1:15432:5432"
+
+  bridge:
+    build:
+      context: ..
+      args:
+        GIT_COMMIT: runtime-qa
+        XMTP_GO_CLIENT_VERSION: runtime-qa
+    command:
+      - --api
+      - --api-port=8080
+      - --listener-type=v4
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APNS_ENABLED: "false"
+      BRIDGE_A9_ENABLED: "false"
+      BRIDGE_WELCOME_ENABLED: "false"
+      DB_CONNECTION_STRING: >-
+        postgres://bridge_runtime_qa:xmtp_runtime_qa@db:5432/bridge_runtime_qa?sslmode=disable
+      HYTCH_SECURE_VAULT: "false"
+      LOG_ENCODING: console
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1:8080/readyz | grep -qx ok
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "127.0.0.1:18080:8080"
