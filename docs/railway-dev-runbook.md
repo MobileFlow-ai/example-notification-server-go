@@ -1,5 +1,29 @@
 # Hytch XMTP Push Bridge — Railway Dev Runbook
 
+## 2026-08-04 L4 local-evidence correction
+
+The dedicated local runtime-QA harness is now confirmed at its narrow scope:
+the bridge image built and ran on loopback ports 15432/18080, migration
+`12|false`, health probes, the serial Go suite, and the payload-free Gate-6
+policy verifier passed. This corrects the prior blanket statement that all
+local runtime QA was unconfirmed.
+
+That narrow pass does not establish A9 route availability. A separate
+lane-isolated vault probe currently returns no route after accepted A9 control,
+watermark, and replacement because currentness requires the assertion lease ID
+to equal the Gate-6 lease selected by replacement (newly generated on the
+new-route path), which is independent of the assertion lease. The replacement
+request carries no assertion lease ID to establish that identity.
+This is a documented source-backed fail-closed blocker, not a test fixture to
+override; see [xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md).
+
+It changes **none** of the deployment gates below. The harness remains
+API-only with secure vault, A9, APNS, Welcome, and the XMTP listener disabled;
+it does not prove private A9 ingress, secure-vault startup, egress, or a
+modern-api-to-bridge loop. The current full acceptance and human-only deploy
+packet is [xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md).
+Do not deploy until its explicit blockers are closed.
+
 This runbook is internal and applies only to Railway `dev`, XMTP dev, and the
 APNS sandbox. It does not authorize a production or public-cohort deployment.
 All numeric limits below are provisional defaults pending measurement.
@@ -8,10 +32,10 @@ All numeric limits below are provisional defaults pending measurement.
 
 This revision is **not yet authorized for A9 activation, APNS egress,
 deployment, or database retirement**. The repository contains the mirrored A9
-v1 conformance contract and dormant bridge runtime source, but local formatting,
-compile, test, database, and integration QA for that source is
-**UNCONFIRMED**. Source availability is not runtime, modern-api rollout,
-migration, client-vector, or end-to-end evidence.
+v1 conformance contract and dormant bridge runtime source, but the full secure
+runtime, modern-api integration, deployment-database, and end-to-end QA for
+that source is **UNCONFIRMED**. Source availability is not runtime,
+modern-api rollout, migration, client-vector, or end-to-end evidence.
 
 Welcome remains compiled hard-closed. The exact zero/one live provider-call
 proof also requires the versioned Gate 8 amendment and recorded Security and
