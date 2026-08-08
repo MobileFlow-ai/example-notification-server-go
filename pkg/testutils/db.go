@@ -17,6 +17,8 @@ import (
 
 const TEST_DSN = "postgres://postgres:xmtp@localhost:25432/postgres?sslmode=disable"
 
+const postgresIdentifierMaxBytes = 63
+
 var dbNameSanitizer = regexp.MustCompile(`[^a-z0-9_]+`)
 
 func CreateTestDb(t *testing.T) *sql.DB {
@@ -97,9 +99,19 @@ func databaseDSN(t *testing.T, dbName string) string {
 }
 
 func uniqueDatabaseName(testName string) string {
+	return formatDatabaseName(testName, time.Now().UnixNano())
+}
+
+func formatDatabaseName(testName string, nonce int64) string {
 	name := strings.ToLower(testName)
 	name = strings.ReplaceAll(name, "/", "_")
 	name = dbNameSanitizer.ReplaceAllString(name, "_")
 	name = strings.Trim(name, "_")
-	return fmt.Sprintf("test_%s_%d", name, time.Now().UnixNano())
+	suffix := fmt.Sprintf("_%d", nonce)
+	prefix := "test_" + name
+	maxPrefixBytes := postgresIdentifierMaxBytes - len(suffix)
+	if len(prefix) > maxPrefixBytes {
+		prefix = strings.TrimRight(prefix[:maxPrefixBytes], "_")
+	}
+	return prefix + suffix
 }

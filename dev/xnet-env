@@ -35,6 +35,8 @@ case "$MESSAGE_SOURCE" in
     ;;
   *)
     echo "Unknown message-source: $MESSAGE_SOURCE (use v3-direct, v4-with-migrator, or v4-direct)" >&2
+    # This fallback is reachable only when the file is executed, not sourced.
+    # shellcheck disable=SC2317
     return 1 2>/dev/null || exit 1
     ;;
 esac

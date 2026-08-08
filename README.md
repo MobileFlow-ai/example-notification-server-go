@@ -36,7 +36,13 @@ You should then be able to build the server using:
 
 ### Running the server
 
-The server can be run using the `./dev/run` script. Both the `worker` (which listens for new messages on the XMTP network and sends push notifications) and the `api` service (which handles HTTP/GRPC requests) are optional, but are recommended to be both enabled in local development. In a deployed environment it may be more desirable to split these services up so that you can have N instances of `api` and a single `worker`.
+The server can be run using the `./dev/run` script. Both the `worker` (which
+listens for XMTP messages and dispatches them to configured delivery services)
+and the `api` service (which handles HTTP/GRPC requests) are optional. A worker
+with zero delivery services is valid for audit-only operation. The current
+Hytch candidate rejects APNS activation until the A9 and Gate 8 deployment
+gates documented in
+[`docs/railway-dev-runbook.md`](docs/railway-dev-runbook.md) are complete.
 
 ```sh
 ## Only has to be run once
@@ -52,50 +58,9 @@ To see a full list of command line options run
 ./dev/run --help
 ```
 
-Here is the output as of 03/01/2024:
-
-```sh
-Usage:
-  main [OPTIONS]
-
-Application Options:
-  -d, --db-connection-string=              Address to database [$DB_CONNECTION_STRING]
-      --log-encoding=[console|json]        Log encoding (default: console) [$LOG_ENCODING]
-      --log-level=[debug|info|error]       log-level (default: info) [$LOG_LEVEL]
-      --create-migration=                  create a migration with the given name
-
-API Options:
-      --api                                Enable the GRPC API server
-  -p, --api-port=                          Port for the Connect GRPC API (default: 8080) [$API_PORT]
-
-Worker Options:
-      --xmtp-listener                      Enable the XMTP listener to actually send notifications. Requires APNSOptions to be configured
-      --xmtp-listener-tls                  Whether to connect to XMTP network using TLS
-  -x, --xmtp-address=                      Address (including port) of XMTP GRPC server [$XMTP_GRPC_ADDRESS]
-      --num-workers=                       Number of workers used to process messages (default: 50)
-
-APNS Options:
-      --apns-enabled                       Enable APNS [$APNS_ENABLED]
-      --apns-p8-certificate=               .p8 certificate data for APNS [$APNS_P8_CERTIFICATE]
-      --apns-p8-certificate-file-path=     .p8 certificate file for APNS [$APNS_P8_CERTIFICATE_FILE_PATH]
-      --apns-key-id=                       Key ID associated with APNS credentials [$APNS_KEY_ID]
-      --apns-team-id=                      APNS Team ID [$APNS_TEAM_ID]
-      --apns-topic=                        Topic to be used on all messages [$APNS_TOPIC]
-      --apns-mode=[development|production] Which APNS servers to deliver to, development or production (default: development) [$APNS_MODE]
-
-FCM Options:
-      --fcm-enabled                        Enable FCM sending [$FCM_ENABLED]
-      --fcm-credentials-json=              FCM Credentials [$FCM_CREDENTIALS_JSON]
-      --fcm-project-id=                    FCM Project ID [$FCM_PROJECT_ID]
-
-HTTP Delivery Options:
-      --http-delivery
-      --http-delivery-address=
-      --http-auth-header=
-
-Help Options:
-  -h, --help                               Show this help message
-```
+The generated help from the candidate binary is authoritative; it is not
+duplicated here so that new safety and maintenance options cannot be hidden by
+a stale snapshot.
 
 ### Generating code
 

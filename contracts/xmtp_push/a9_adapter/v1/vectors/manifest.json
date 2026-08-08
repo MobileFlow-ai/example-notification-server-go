@@ -1,0 +1,16 @@
+{
+  "contract": "hytch.xmtp-push.a9-adapter.v1",
+  "generated_by": "generate_vectors.py",
+  "negative_sha256": "c20c0243314bdaa686cf090cee90671fa79808973ff0df1a8c2f5b37ac86ee95",
+  "negative_vector_count": 54,
+  "positive_sha256": "5f5259665e6fceab723ffd08c5ce1360dd1ef1874b801fce6ef5f9f949630b54",
+  "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "terminal_verdicts": [
+    "ELIGIBLE",
+    "INVALID",
+    "STALE",
+    "REVOKED",
+    "INCONCLUSIVE"
+  ],
+  "welcome": "CLOSED"
+}

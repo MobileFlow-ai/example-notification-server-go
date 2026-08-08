@@ -128,6 +128,16 @@ func (q *Queries) DeactivateSubscriptions(ctx context.Context, arg DeactivateSub
 	return err
 }
 
+const deleteSubscriptionHmacKeys = `-- name: DeleteSubscriptionHmacKeys :exec
+DELETE FROM subscription_hmac_keys
+WHERE subscription_id = ANY($1::bigint[])
+`
+
+func (q *Queries) DeleteSubscriptionHmacKeys(ctx context.Context, subscriptionIds []int64) error {
+	_, err := q.db.ExecContext(ctx, deleteSubscriptionHmacKeys, pq.Array(subscriptionIds))
+	return err
+}
+
 const listActiveSubscriptionsByTopicAndPeriod = `-- name: ListActiveSubscriptionsByTopicAndPeriod :many
 SELECT
     s.id,

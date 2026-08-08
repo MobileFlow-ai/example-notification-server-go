@@ -1,6 +1,9 @@
 package interfaces
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"testing"
 
@@ -8,6 +11,41 @@ import (
 	proto "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1"
 	"github.com/xmtp/xmtpd/pkg/topic"
 )
+
+func TestHmacKeyIsValid(t *testing.T) {
+	require.True(t, HmacKey{
+		ThirtyDayPeriodsSinceEpoch: 1,
+		Key:                        bytes.Repeat([]byte{0x01}, sha256.Size),
+	}.IsValid())
+	require.False(t, HmacKey{
+		ThirtyDayPeriodsSinceEpoch: -1,
+		Key:                        bytes.Repeat([]byte{0x01}, sha256.Size),
+	}.IsValid())
+	require.False(t, HmacKey{
+		ThirtyDayPeriodsSinceEpoch: 1,
+		Key:                        []byte("short"),
+	}.IsValid())
+}
+
+func TestMessageContextRequiresWellFormedSenderHmac(t *testing.T) {
+	key := bytes.Repeat([]byte{0x01}, sha256.Size)
+	data := []byte("message")
+	hash := hmac.New(sha256.New, key)
+	_, _ = hash.Write(data)
+	senderHmac := hash.Sum(nil)
+	messageContext := MessageContext{
+		HmacInputs: &data,
+		SenderHmac: &senderHmac,
+	}
+
+	require.True(t, messageContext.HasValidSenderHmac())
+	require.True(t, messageContext.IsSender(key))
+
+	malformed := []byte("short")
+	messageContext.SenderHmac = &malformed
+	require.False(t, messageContext.HasValidSenderHmac())
+	require.False(t, messageContext.IsSender(key))
+}
 
 type subscriptionJSON struct {
 	Topic         string `json:"topic"`
@@ -101,19 +139,25 @@ func TestSendRequest_MarshalJSON_BackwardCompatible(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &result))
 
 	require.Equal(t, "/xmtp/mls/1/w-test/proto", result.Message.ContentTopic)
-	require.NotEmpty(t, result.Message.Message)
+	require.Empty(t, result.Message.Message)
 
 	require.Empty(t, result.Topic)
 	require.Empty(t, result.EncryptedMessage)
 	require.Equal(t, "abc123", result.IdempotencyKey)
 	require.Equal(t, "v3-welcome", result.MessageContext.MessageType)
+
+	var raw map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &raw))
+	message := raw["message"].(map[string]interface{})
+	require.NotContains(t, message, "message")
+	require.NotContains(t, string(data), "encrypted-data")
 }
 
 func TestSendRequest_MarshalJSON_TopicBytesIncluded(t *testing.T) {
 	req := SendRequest{
 		IdempotencyKey:   "abc123",
 		Topic:            "/xmtp/mls/1/g-01020304/proto",
-		TopicBytesB64:       "AQECBA==",
+		TopicBytesB64:    "AQECBA==",
 		EncryptedMessage: []byte("encrypted-data"),
 		PayloadFormat:    PayloadFormatV4,
 		MessageContext:   MessageContext{MessageType: "v3-conversation"},

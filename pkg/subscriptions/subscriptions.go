@@ -14,14 +14,12 @@ import (
 )
 
 type SubscriptionsService struct {
-	logger  *zap.Logger
 	db      *sql.DB
 	queries *queries.Queries
 }
 
-func NewSubscriptionsService(logger *zap.Logger, db *sql.DB) *SubscriptionsService {
+func NewSubscriptionsService(_ *zap.Logger, db *sql.DB) *SubscriptionsService {
 	return &SubscriptionsService{
-		logger:  logger.Named("subscriptions-service"),
 		db:      db,
 		queries: queries.New(db),
 	}
@@ -70,6 +68,10 @@ func (s SubscriptionsService) SubscribeWithMetadata(
 	installationID string,
 	subscriptions []interfaces.SubscriptionInput,
 ) error {
+	if err := validateSubscriptionInputs(subscriptions); err != nil {
+		return err
+	}
+
 	return database.RunInTx(ctx, s.db, func(qtx *queries.Queries) error {
 		if len(subscriptions) == 0 {
 			return nil
@@ -78,9 +80,6 @@ func (s SubscriptionsService) SubscribeWithMetadata(
 		topicBytes := make([][]byte, len(subscriptions))
 		isSilents := make([]bool, len(subscriptions))
 		for i, sub := range subscriptions {
-			if sub.Topic == nil {
-				return errors.New("subscription topic must not be nil")
-			}
 			topicBytes[i] = sub.Topic.Bytes()
 			isSilents[i] = sub.IsSilent
 		}
@@ -97,6 +96,14 @@ func (s SubscriptionsService) SubscribeWithMetadata(
 		topicToID := make(map[string]int64, len(rows))
 		for _, row := range rows {
 			topicToID[string(row.Topic)] = row.ID
+		}
+
+		refreshedSubscriptionIDs := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			refreshedSubscriptionIDs = append(refreshedSubscriptionIDs, row.ID)
+		}
+		if err := qtx.DeleteSubscriptionHmacKeys(ctx, refreshedSubscriptionIDs); err != nil {
+			return err
 		}
 
 		var (
@@ -123,6 +130,26 @@ func (s SubscriptionsService) SubscribeWithMetadata(
 
 		return nil
 	})
+}
+
+func validateSubscriptionInputs(subscriptions []interfaces.SubscriptionInput) error {
+	for _, sub := range subscriptions {
+		if sub.Topic == nil {
+			return errors.New("subscription topic must not be nil")
+		}
+
+		periods := make(map[int]struct{}, len(sub.HmacKeys))
+		for _, key := range sub.HmacKeys {
+			if !key.IsValid() {
+				return errors.New("subscription HMAC key is malformed")
+			}
+			if _, exists := periods[key.ThirtyDayPeriodsSinceEpoch]; exists {
+				return errors.New("subscription HMAC key period is duplicated")
+			}
+			periods[key.ThirtyDayPeriodsSinceEpoch] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func (s SubscriptionsService) Unsubscribe(ctx context.Context, installationID string, topics []*topic.Topic) error {
@@ -159,17 +186,18 @@ func (s SubscriptionsService) GetSubscriptions(
 	for _, result := range results {
 		parsedTopic, err := topic.ParseTopic(result.Topic)
 		if err != nil {
-			s.logger.Warn("failed to parse topic from DB", zap.Error(err))
 			continue
 		}
+		expectedHmacKeyPeriod := thirtyDayPeriod
 		subscription := interfaces.Subscription{
-			Id:             result.ID,
-			CreatedAt:      result.CreatedAt,
-			InstallationId: result.InstallationID,
-			Topic:          topicutil.TopicToString(parsedTopic),
-			TopicV4:        parsedTopic,
-			IsActive:       result.IsActive,
-			IsSilent:       result.IsSilent,
+			Id:                    result.ID,
+			CreatedAt:             result.CreatedAt,
+			InstallationId:        result.InstallationID,
+			Topic:                 topicutil.TopicToString(parsedTopic),
+			TopicV4:               parsedTopic,
+			IsActive:              result.IsActive,
+			IsSilent:              result.IsSilent,
+			ExpectedHmacKeyPeriod: &expectedHmacKeyPeriod,
 		}
 		if result.ThirtyDayPeriodsSinceEpoch.Valid {
 			subscription.HmacKey = &interfaces.HmacKey{

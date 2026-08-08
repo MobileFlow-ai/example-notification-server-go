@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "subscriptions_replace_request.schema.json",
+  "title": "Hytch A9 Subscription Replace Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol",
+    "schema_version",
+    "environment",
+    "installation_binding_id",
+    "sequencer_epoch",
+    "subscription_generation",
+    "expected_subscription_generation",
+    "idempotency_key",
+    "legacy_installation_id",
+    "account_incarnation_id",
+    "apns_token_base64url",
+    "payload_schema",
+    "policy_control_base64url",
+    "subscriptions"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "hytch.a9-subscription-replace"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "installation_binding_id": {
+      "$ref": "#/$defs/base64url_16"
+    },
+    "sequencer_epoch": {
+      "$ref": "#/$defs/base64url_16"
+    },
+    "subscription_generation": {
+      "$ref": "#/$defs/positive_safe_integer"
+    },
+    "expected_subscription_generation": {
+      "$ref": "#/$defs/nonnegative_safe_integer"
+    },
+    "idempotency_key": {
+      "$ref": "#/$defs/canonical_uuid"
+    },
+    "legacy_installation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "account_incarnation_id": {
+      "$ref": "#/$defs/canonical_uuid"
+    },
+    "apns_token_base64url": {
+      "$ref": "#/$defs/base64url_32"
+    },
+    "payload_schema": {
+      "const": "hytch_push_wrapper_v1"
+    },
+    "policy_control_base64url": {
+      "$ref": "#/$defs/bounded_base64url"
+    },
+    "subscriptions": {
+      "type": "array",
+      "maxItems": 2048,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/subscription"
+      }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "type": "string",
+      "enum": [
+        "dev",
+        "production"
+      ]
+    },
+    "canonical_uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "base64url_16": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
+    "base64url_32": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "base64url_33": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{44}$"
+    },
+    "bounded_base64url": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$"
+    },
+    "positive_safe_integer": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonnegative_safe_integer": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positive_uint32": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "nonnegative_int32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "subscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id",
+        "binding_version",
+        "assertion_hash",
+        "topic_binding",
+        "topic_key_epoch",
+        "route_key_epoch",
+        "topic_base64url",
+        "transport_conversation_id",
+        "route_key_base64url",
+        "hmac_keys",
+        "receive_capability_base64url"
+      ],
+      "properties": {
+        "binding_id": {
+          "$ref": "#/$defs/base64url_16"
+        },
+        "binding_version": {
+          "$ref": "#/$defs/positive_safe_integer"
+        },
+        "assertion_hash": {
+          "$ref": "#/$defs/base64url_32"
+        },
+        "topic_binding": {
+          "$ref": "#/$defs/base64url_32"
+        },
+        "topic_key_epoch": {
+          "$ref": "#/$defs/positive_uint32"
+        },
+        "route_key_epoch": {
+          "$ref": "#/$defs/positive_uint32"
+        },
+        "topic_base64url": {
+          "$ref": "#/$defs/base64url_33"
+        },
+        "transport_conversation_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "route_key_base64url": {
+          "$ref": "#/$defs/base64url_32"
+        },
+        "hmac_keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/hmac_key"
+          }
+        },
+        "receive_capability_base64url": {
+          "$ref": "#/$defs/bounded_base64url"
+        }
+      }
+    },
+    "hmac_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "thirty_day_periods_since_epoch",
+        "key_base64url"
+      ],
+      "properties": {
+        "thirty_day_periods_since_epoch": {
+          "$ref": "#/$defs/nonnegative_int32"
+        },
+        "key_base64url": {
+          "$ref": "#/$defs/base64url_32"
+        }
+      }
+    }
+  }
+}

@@ -12,14 +12,12 @@ import (
 )
 
 type DefaultInstallationService struct {
-	logger  *zap.Logger
 	db      *sql.DB
 	queries *queries.Queries
 }
 
-func NewInstallationsService(logger *zap.Logger, db *sql.DB) *DefaultInstallationService {
+func NewInstallationsService(_ *zap.Logger, db *sql.DB) *DefaultInstallationService {
 	return &DefaultInstallationService{
-		logger:  logger.Named("installations"),
 		db:      db,
 		queries: queries.New(db),
 	}

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS hytch_push_vault.welcome_authorizations_envelope_lookup_idx;

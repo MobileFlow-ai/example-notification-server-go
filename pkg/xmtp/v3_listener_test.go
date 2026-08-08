@@ -17,7 +17,9 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/testutils"
 	topics "github.com/xmtp/example-notification-server-go/pkg/topics"
 	v1 "github.com/xmtp/xmtpd/pkg/proto/message_api/v1"
+	mlsV1 "github.com/xmtp/xmtpd/pkg/proto/mls/api/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -37,11 +39,19 @@ func buildTestListener(t *testing.T, deliveryService interfaces.Delivery) *Liste
 	installations := installations.NewInstallationsService(logger, db)
 	subscriptions := subscriptions.NewSubscriptionsService(logger, db)
 
-	l, err := NewListener(ctx, logger, opts, installations, subscriptions, []interfaces.Delivery{deliveryService}, "test", "test")
+	l, err := NewListener(
+		ctx,
+		logger,
+		opts,
+		installations,
+		subscriptions,
+		[]interfaces.Delivery{deliveryService},
+		"test",
+		"test",
+	)
 	if err != nil {
 		require.NoError(t, err)
 	}
-	l.Start()
 
 	t.Cleanup(func() {
 		cancel()
@@ -51,15 +61,40 @@ func buildTestListener(t *testing.T, deliveryService interfaces.Delivery) *Liste
 	return l
 }
 
-func injectMessage(listener *Listener, topic string, message []byte) {
-	listener.messageChannel <- &v1.Envelope{
+func testEnvelope(topic string, message []byte) *v1.Envelope {
+	return &v1.Envelope{
 		ContentTopic: topic,
 		Message:      message,
 		TimestampNs:  uint64(time.Now().UnixNano()),
 	}
 }
 
-func subscribeToTopic(t *testing.T, l *Listener, installationId, topicStr string, isSilent bool) {
+func TestBuildV3IdempotencyKeyIsStableAndFieldBound(t *testing.T) {
+	left := &v1.Envelope{
+		ContentTopic: "ab",
+		Message:      []byte("c"),
+		TimestampNs:  42,
+	}
+	right := &v1.Envelope{
+		ContentTopic: "a",
+		Message:      []byte("bc"),
+		TimestampNs:  42,
+	}
+
+	leftKey := buildIdempotencyKey(left)
+	require.Len(t, leftKey, 64)
+	require.Equal(t, leftKey, buildIdempotencyKey(left))
+	require.NotEqual(t, leftKey, buildIdempotencyKey(right))
+}
+
+func subscribeToTopic(
+	t *testing.T,
+	l *Listener,
+	installationId string,
+	topicStr string,
+	isSilent bool,
+	hmacKeys ...interfaces.HmacKey,
+) {
 	_, err := l.installations.Register(t.Context(), interfaces.Installation{
 		Id: installationId,
 		DeliveryMechanism: interfaces.DeliveryMechanism{
@@ -72,26 +107,50 @@ func subscribeToTopic(t *testing.T, l *Listener, installationId, topicStr string
 	parsed, err := topics.ParseV3Topic(topicStr)
 	require.NoError(t, err)
 
-	err = l.subscriptions.SubscribeWithMetadata(t.Context(), installationId, []interfaces.SubscriptionInput{{Topic: parsed, IsSilent: isSilent}})
+	err = l.subscriptions.SubscribeWithMetadata(t.Context(), installationId, []interfaces.SubscriptionInput{{
+		Topic:    parsed,
+		IsSilent: isSilent,
+		HmacKeys: hmacKeys,
+	}})
 	require.NoError(t, err)
 }
 
-func Test_BasicDelivery(t *testing.T) {
-	mockDeliveryService, sendCount := testutils.MockDeliveryWithSendCounter(t)
+func buildV3ConversationEnvelope(
+	t *testing.T,
+	topic string,
+	timestamp time.Time,
+	data []byte,
+	senderHmac []byte,
+) *v1.Envelope {
+	t.Helper()
+
+	message, err := proto.Marshal(&mlsV1.GroupMessage{
+		Version: &mlsV1.GroupMessage_V1_{
+			V1: &mlsV1.GroupMessage_V1{
+				CreatedNs:  uint64(timestamp.UnixNano()),
+				Data:       data,
+				SenderHmac: senderHmac,
+				ShouldPush: true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	return &v1.Envelope{
+		ContentTopic: topic,
+		Message:      message,
+		TimestampNs:  uint64(timestamp.UnixNano()),
+	}
+}
+
+func Test_UncorrelatedWelcomeFailsClosed(t *testing.T) {
+	mockDeliveryService := mocks.NewDelivery(t)
 	l := buildTestListener(t, mockDeliveryService)
 
 	subscribeToTopic(t, l, INSTALLATION_ID, TEST_TOPIC, false)
-	injectMessage(l, TEST_TOPIC, []byte("test"))
-	testutils.RequireEventuallySendCount(t, sendCount, 1)
+	require.NoError(t, l.processEnvelope(testEnvelope(TEST_TOPIC, []byte("test"))))
 
-	mockDeliveryService.AssertCalled(t, "CanDeliver", mock.Anything)
-	mockDeliveryService.AssertNumberOfCalls(t, "Send", 1)
-
-	sendReqs := testutils.GetSendRequests(mockDeliveryService)
-	require.Len(t, sendReqs, 1)
-	require.Equal(t, INSTALLATION_ID, sendReqs[0].Installation.Id)
-	require.Equal(t, TEST_TOPIC, sendReqs[0].Topic)
-	require.Equal(t, topics.V3Welcome, sendReqs[0].MessageContext.MessageType)
+	mockDeliveryService.AssertNotCalled(t, "CanDeliver", mock.Anything)
+	mockDeliveryService.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
 }
 
 func Test_MultipleDeliveries(t *testing.T) {
@@ -113,11 +172,18 @@ func Test_MultipleDeliveries(t *testing.T) {
 		Once().
 		Return(nil)
 
-	subscribeToTopic(t, l, INSTALLATION_ID, TEST_TOPIC, false)
-	subscribeToTopic(t, l, INSTALLATION_ID_2, TEST_TOPIC, false)
+	rawFixture := getRawFixture(t, "v3-conversation")
+	envelope := getEnvelope(t, rawFixture)
+	hmacKey := interfaces.HmacKey{
+		ThirtyDayPeriodsSinceEpoch: getThirtyDayPeriodsFromEpoch(envelope),
+		Key:                        testHmacKey(0x11),
+	}
 
-	injectMessage(l, TEST_TOPIC, []byte("test"))
-	testutils.RequireEventuallySendCount(t, &sendCount, 2)
+	subscribeToTopic(t, l, INSTALLATION_ID, envelope.ContentTopic, false, hmacKey)
+	subscribeToTopic(t, l, INSTALLATION_ID_2, envelope.ContentTopic, false, hmacKey)
+
+	require.EqualError(t, l.processEnvelope(envelope), "failed")
+	require.Equal(t, int32(2), sendCount.Load())
 
 	mockDeliveryService.AssertCalled(t, "CanDeliver", mock.Anything)
 	mockDeliveryService.AssertNumberOfCalls(t, "Send", 2)
@@ -128,8 +194,78 @@ func Test_MultipleDeliveries(t *testing.T) {
 		sendReqs[0].Installation.Id,
 		sendReqs[1].Installation.Id,
 	})
-	require.Equal(t, TEST_TOPIC, sendReqs[0].Topic)
-	require.Equal(t, TEST_TOPIC, sendReqs[1].Topic)
+	require.Equal(t, envelope.ContentTopic, sendReqs[0].Topic)
+	require.Equal(t, envelope.ContentTopic, sendReqs[1].Topic)
+}
+
+func Test_V3Listener_ExactPeriodSelfHmacSkipsDelivery(t *testing.T) {
+	mockDeliveryService := mocks.NewDelivery(t)
+	l := buildTestListener(t, mockDeliveryService)
+	topic := "/xmtp/mls/1/g-24ce39d660600b3a98adff3075b6d1f4/proto"
+	timestamp := time.Unix(int64(20*30*24*time.Hour/time.Second), 0)
+	key := testHmacKey(0x31)
+	data := []byte("self-message")
+	envelope := buildV3ConversationEnvelope(
+		t,
+		topic,
+		timestamp,
+		data,
+		testSenderHmac(key, data),
+	)
+	period := getThirtyDayPeriodsFromEpoch(envelope)
+	subscribeToTopic(t, l, INSTALLATION_ID, topic, false, interfaces.HmacKey{
+		ThirtyDayPeriodsSinceEpoch: period,
+		Key:                        key,
+	})
+
+	require.NoError(t, l.processEnvelope(envelope))
+	mockDeliveryService.AssertNotCalled(t, "CanDeliver", mock.Anything)
+	mockDeliveryService.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
+}
+
+func Test_V3Listener_PeriodRolloverFailsClosedUntilExactKeyRefresh(t *testing.T) {
+	mockDeliveryService := testutils.MockDeliveryAcceptAll(t)
+	l := buildTestListener(t, mockDeliveryService)
+	topic := "/xmtp/mls/1/g-34ce39d660600b3a98adff3075b6d1f4/proto"
+	timestamp := time.Unix(int64(21*30*24*time.Hour/time.Second)+1, 0)
+	subscriberKey := testHmacKey(0x41)
+	data := []byte("message-from-another-member")
+	envelope := buildV3ConversationEnvelope(
+		t,
+		topic,
+		timestamp,
+		data,
+		testSenderHmac(testHmacKey(0x42), data),
+	)
+	currentPeriod := getThirtyDayPeriodsFromEpoch(envelope)
+	subscribeToTopic(t, l, INSTALLATION_ID, topic, false, interfaces.HmacKey{
+		ThirtyDayPeriodsSinceEpoch: currentPeriod - 1,
+		Key:                        subscriberKey,
+	})
+
+	require.NoError(t, l.processEnvelope(envelope))
+	mockDeliveryService.AssertNotCalled(t, "Send", mock.Anything, mock.Anything)
+
+	parsed := testutils.MustParseTopic(t, topic)
+	require.NoError(t, l.subscriptions.SubscribeWithMetadata(
+		t.Context(),
+		INSTALLATION_ID,
+		[]interfaces.SubscriptionInput{{
+			Topic: parsed,
+			HmacKeys: []interfaces.HmacKey{{
+				ThirtyDayPeriodsSinceEpoch: currentPeriod,
+				Key:                        subscriberKey,
+			}},
+		}},
+	))
+
+	require.NoError(t, l.processEnvelope(envelope))
+	mockDeliveryService.AssertNumberOfCalls(t, "Send", 1)
+	sendRequests := testutils.GetSendRequests(mockDeliveryService)
+	require.Len(t, sendRequests, 1)
+	require.NotNil(t, sendRequests[0].Subscription.ExpectedHmacKeyPeriod)
+	require.Equal(t, currentPeriod, *sendRequests[0].Subscription.ExpectedHmacKeyPeriod)
+	require.Equal(t, currentPeriod, sendRequests[0].Subscription.HmacKey.ThirtyDayPeriodsSinceEpoch)
 }
 
 type subscribeAllOnlyMessageAPIClient struct {

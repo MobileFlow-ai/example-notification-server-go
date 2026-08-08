@@ -10,29 +10,30 @@ import (
 
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
+	"github.com/xmtp/example-notification-server-go/pkg/pushpolicy"
 	"go.uber.org/zap"
 )
 
 type HttpDelivery struct {
 	address           string
 	authHeader        string
-	logger            *zap.Logger
 	maxAttempts       int
 	initialRetryDelay time.Duration
+	waitForRetry      func(context.Context, time.Duration) error
 }
 
-func NewHttpDelivery(logger *zap.Logger, opts options.HttpDeliveryOptions) *HttpDelivery {
+func NewHttpDelivery(_ *zap.Logger, opts options.HttpDeliveryOptions) *HttpDelivery {
 	maxAttempts := opts.MaxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
 
 	return &HttpDelivery{
-		logger:            logger,
 		address:           opts.Address,
 		authHeader:        opts.AuthHeader,
 		maxAttempts:       maxAttempts,
 		initialRetryDelay: time.Duration(opts.InitialRetryDelayMs) * time.Millisecond,
+		waitForRetry:      waitForRetryDelay,
 	}
 }
 
@@ -41,6 +42,10 @@ func (h HttpDelivery) CanDeliver(req interfaces.SendRequest) bool {
 }
 
 func (h HttpDelivery) Send(ctx context.Context, req interfaces.SendRequest) error {
+	if !pushpolicy.AllowsDelivery(ctx, req) {
+		return pushpolicy.ErrUnauthorized
+	}
+
 	// Convert the request data to JSON (non-retryable)
 	jsonData, err := json.Marshal(req)
 	if err != nil {
@@ -56,22 +61,28 @@ func (h HttpDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 
 		if attempt < h.maxAttempts-1 {
 			delay := h.initialRetryDelay * (1 << uint(attempt))
-			h.logger.Warn("HTTP delivery failed, retrying",
-				zap.Int("attempt", attempt+1),
-				zap.Int("max_attempts", h.maxAttempts),
-				zap.Duration("next_delay", delay),
-				zap.Error(lastErr),
-			)
-			select {
-			case <-time.After(delay):
-				// continue to next attempt
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := h.waitForRetry(ctx, delay); err != nil {
+				return err
 			}
 		}
 	}
 
 	return lastErr
+}
+
+func waitForRetryDelay(
+	ctx context.Context,
+	delay time.Duration,
+) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (h HttpDelivery) doSend(ctx context.Context, jsonData []byte) error {
@@ -98,9 +109,6 @@ func (h HttpDelivery) doSend(ctx context.Context, jsonData []byte) error {
 
 	// Check the response status code
 	if response.StatusCode != http.StatusOK {
-		h.logger.Error("HTTP request failed",
-			zap.Int("status_code", response.StatusCode),
-		)
 		return errors.New("HTTP request failed")
 	}
 

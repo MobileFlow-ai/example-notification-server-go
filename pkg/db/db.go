@@ -37,6 +37,10 @@ func MigrateUpTo(ctx context.Context, db *sql.DB, version uint) error {
 	return migrations.MigrateUpTo(ctx, db, version)
 }
 
+func RequireCurrentSchema(ctx context.Context, db *sql.DB) error {
+	return migrations.RequireCurrent(ctx, db)
+}
+
 func CreateMigrationFiles(name string) ([]migrations.File, error) {
 	return migrations.CreateFiles("pkg/db/migrations", name)
 }

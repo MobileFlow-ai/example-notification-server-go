@@ -1,5 +1,21 @@
 #!/bin/bash
 set -eou pipefail
 
-read -ra shellcheck_paths <<< "$(grep -rIzl '^#!' dev)"
+shell_shebang='^#!.*(/|[[:space:]])(a|ba|da|k|mk|z)?sh([[:space:]]|$)'
+shellcheck_paths=()
+while IFS= read -r -d '' path; do
+  [[ -f "$path" ]] || continue
+
+  first_line=
+  IFS= read -r -n 256 first_line < "$path" || true
+  if [[ "$first_line" =~ $shell_shebang ]]; then
+    shellcheck_paths+=("$path")
+  fi
+done < <(git ls-files -z --)
+
+if ((${#shellcheck_paths[@]} == 0)); then
+  echo "No tracked shell scripts found" >&2
+  exit 1
+fi
+
 shellcheck "${shellcheck_paths[@]}"

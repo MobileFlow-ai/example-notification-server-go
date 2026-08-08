@@ -1,13 +1,15 @@
 # BUILD IMAGE --------------------------------------------------------
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 # Get build tools and required header files
 RUN apk add --no-cache build-base
 
 WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
 
-# Build the final node binary
+# Build the final server binary
 ARG GIT_COMMIT=unknown
 ARG XMTP_GO_CLIENT_VERSION=unknown
 RUN go build \
@@ -17,7 +19,7 @@ RUN go build \
 
 # ACTUAL IMAGE -------------------------------------------------------
 
-FROM alpine:3
+FROM alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 LABEL maintainer="engineering@xmtp.com"
 LABEL source="https://github.com/xmtp/example-notification-server-go"
@@ -25,11 +27,21 @@ LABEL description="XMTP Example Notification Server"
 
 # color, nocolor, json
 ENV GOLOG_LOG_FMT=nocolor
+# Raw-processing paths use fixed-message recover boundaries. GOTRACEBACK is a
+# defense-in-depth control for unrecoverable runtime faults: it suppresses
+# argument-bearing goroutine stacks but is not itself the panic-value scrubber.
+ENV GOTRACEBACK=none
 
 # go-waku default port
 EXPOSE 8080
 
-COPY --from=builder /app/bin/notifications-server /usr/bin/
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S bridge \
+    && adduser -S -D -H -G bridge bridge
+
+COPY --from=builder --chown=bridge:bridge /app/bin/notifications-server /usr/bin/
+
+USER bridge
 
 ENTRYPOINT ["/usr/bin/notifications-server"]
 # By default just show help if called without arguments

@@ -72,3 +72,18 @@ func Test_IdentifyV3Conversation(t *testing.T) {
 	require.True(t, *contextWithWrongKey.ShouldPush)
 	require.Equal(t, contextWithWrongKey.MessageType, topics.V3Conversation)
 }
+
+func Test_MalformedV3ConversationLeavesShouldPushUnknown(t *testing.T) {
+	rawFixture := getRawFixture(t, "v3-conversation")
+	envelope := getEnvelope(t, rawFixture)
+	envelope.Message = []byte{0xff}
+
+	tp, err := topics.ParseV3Topic(envelope.ContentTopic)
+	require.NoError(t, err)
+
+	context := getContext(envelope, tp)
+	require.Equal(t, topics.V3Conversation, context.MessageType)
+	require.Nil(t, context.ShouldPush)
+	require.Nil(t, context.HmacInputs)
+	require.Nil(t, context.SenderHmac)
+}

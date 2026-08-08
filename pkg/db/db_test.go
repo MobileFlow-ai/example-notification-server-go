@@ -23,6 +23,10 @@ func TestMigrateFreshDatabase(t *testing.T) {
 	assertRelationExists(t, db, "subscription_hmac_keys")
 	assertRelationExists(t, db, "subscriptions_installation_id_topic_idx")
 	assertRelationExists(t, db, "device_delivery_mechanisms_latest_idx")
+	assertQualifiedRelationExists(t, db, "hytch_push_vault.installation_states")
+	assertQualifiedRelationExists(t, db, "hytch_push_vault.subscription_leases")
+	assertQualifiedRelationExists(t, db, "hytch_push_vault.delivery_jobs")
+	assertQualifiedRelationExists(t, db, "hytch_push_vault.delivery_dedupes")
 }
 
 func TestMigrateExistingLegacySchema(t *testing.T) {
@@ -78,6 +82,44 @@ func TestMigrateExistingLegacySchema(t *testing.T) {
 	latest, latestErr := database.LatestMigrationVersion()
 	require.NoError(t, latestErr)
 	require.Equal(t, latest, version)
+}
+
+func TestRequireCurrentSchemaIsReadOnlyAndExact(t *testing.T) {
+	db := testdb.CreateEmptyTestDb(t)
+
+	require.Error(t, database.RequireCurrentSchema(t.Context(), db))
+	var schemaTableExists bool
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT to_regclass('public.schema_migrations') IS NOT NULL`,
+	).Scan(&schemaTableExists))
+	require.False(t, schemaTableExists)
+
+	latest, err := database.LatestMigrationVersion()
+	require.NoError(t, err)
+	require.Greater(t, latest, 1)
+	require.NoError(
+		t,
+		database.MigrateUpTo(t.Context(), db, uint(latest-1)),
+	)
+	require.Error(t, database.RequireCurrentSchema(t.Context(), db))
+
+	var version int
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT version FROM public.schema_migrations`,
+	).Scan(&version))
+	require.Equal(t, latest-1, version)
+
+	require.NoError(t, database.Migrate(t.Context(), db))
+	require.NoError(t, database.RequireCurrentSchema(t.Context(), db))
+
+	_, err = db.ExecContext(
+		t.Context(),
+		`UPDATE public.schema_migrations SET dirty = TRUE`,
+	)
+	require.NoError(t, err)
+	require.Error(t, database.RequireCurrentSchema(t.Context(), db))
 }
 
 func TestMigration_BinaryTopics_DataConversion(t *testing.T) {
@@ -146,6 +188,7 @@ func resetSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
 
 	statements := []string{
+		"DROP SCHEMA IF EXISTS hytch_push_vault CASCADE",
 		"DROP TABLE IF EXISTS schema_migrations",
 		"DROP TABLE IF EXISTS bun_migrations",
 		"DROP TABLE IF EXISTS subscription_hmac_keys",
@@ -164,6 +207,15 @@ func assertRelationExists(t *testing.T, db *sql.DB, name string) {
 
 	var exists bool
 	err := db.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, "public."+name).Scan(&exists)
+	require.NoError(t, err)
+	require.True(t, exists, name)
+}
+
+func assertQualifiedRelationExists(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+
+	var exists bool
+	err := db.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&exists)
 	require.NoError(t, err)
 	require.True(t, exists, name)
 }

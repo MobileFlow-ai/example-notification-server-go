@@ -256,7 +256,7 @@ describe("notifications", () => {
     await expectNoNotification(alix.installationId, 3000);
   });
 
-  test("group message sender filtering", async () => {
+  test("group self-message suppression", async () => {
     const alix = await randomClient();
     const bo = await randomClient();
     const notifClient = createNotificationClient();

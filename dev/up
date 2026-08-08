@@ -32,6 +32,7 @@ is_node_registered() { xnet addresses 2>&1 | grep -q "xnet-100"; }
 is_v3_node_running() { docker inspect xnet-node --format '{{.State.Running}}' 2>/dev/null | grep -q '^true$'; }
 
 MESSAGE_SOURCE="${1:-v3-direct}"
+# shellcheck source=dev/xnet-env
 source "$SCRIPT_DIR/xnet-env" "$MESSAGE_SOURCE"
 
 ensure_xnet_cli

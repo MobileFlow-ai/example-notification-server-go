@@ -3,21 +3,23 @@ package delivery
 import (
 	"context"
 	"encoding/base64"
+
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
 	"github.com/pkg/errors"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
+	"github.com/xmtp/example-notification-server-go/pkg/pushpolicy"
+	"github.com/xmtp/example-notification-server-go/pkg/topics"
 	"go.uber.org/zap"
 	"google.golang.org/api/option"
 )
 
 type FcmDelivery struct {
-	logger *zap.Logger
 	client *messaging.Client
 }
 
-func NewFcmDelivery(ctx context.Context, logger *zap.Logger, opts options.FcmOptions) (*FcmDelivery, error) {
+func NewFcmDelivery(ctx context.Context, _ *zap.Logger, opts options.FcmOptions) (*FcmDelivery, error) {
 	creds := option.WithCredentialsJSON([]byte(opts.CredentialsJson))
 	app, err := firebase.NewApp(ctx, &firebase.Config{
 		ProjectID: opts.ProjectId,
@@ -39,7 +41,6 @@ func NewFcmDelivery(ctx context.Context, logger *zap.Logger, opts options.FcmOpt
 	}
 
 	return &FcmDelivery{
-		logger: logger,
 		client: messaging,
 	}, nil
 }
@@ -49,6 +50,10 @@ func (f FcmDelivery) CanDeliver(req interfaces.SendRequest) bool {
 }
 
 func (f FcmDelivery) Send(ctx context.Context, req interfaces.SendRequest) error {
+	if !pushpolicy.AllowsDelivery(ctx, req) {
+		return pushpolicy.ErrUnauthorized
+	}
+
 	data := buildFcmData(req)
 
 	apnsHeaders := map[string]string{}
@@ -90,10 +95,12 @@ func (f FcmDelivery) Send(ctx context.Context, req interfaces.SendRequest) error
 
 func buildFcmApnsCustomData(req interfaces.SendRequest, data map[string]string) map[string]interface{} {
 	customData := map[string]interface{}{
-		"topic":            req.Topic,
-		"encryptedMessage": data["encryptedMessage"],
-		"messageType":      data["messageType"],
-		"payloadFormat":    data["payloadFormat"],
+		"topic":         req.Topic,
+		"messageType":   data["messageType"],
+		"payloadFormat": data["payloadFormat"],
+	}
+	if encryptedMessage, ok := data["encryptedMessage"]; ok {
+		customData["encryptedMessage"] = encryptedMessage
 	}
 	if req.TopicBytesB64 != "" {
 		customData["topicBytesB64"] = req.TopicBytesB64
@@ -103,10 +110,12 @@ func buildFcmApnsCustomData(req interfaces.SendRequest, data map[string]string) 
 
 func buildFcmData(req interfaces.SendRequest) map[string]string {
 	data := map[string]string{
-		"topic":            req.Topic,
-		"encryptedMessage": base64.StdEncoding.EncodeToString(req.EncryptedMessage),
-		"messageType":      string(req.MessageContext.MessageType),
-		"payloadFormat":    req.PayloadFormat.String(),
+		"topic":         req.Topic,
+		"messageType":   string(req.MessageContext.MessageType),
+		"payloadFormat": req.PayloadFormat.String(),
+	}
+	if req.MessageContext.MessageType != topics.V3Welcome {
+		data["encryptedMessage"] = base64.StdEncoding.EncodeToString(req.EncryptedMessage)
 	}
 	if req.TopicBytesB64 != "" {
 		data["topicBytesB64"] = req.TopicBytesB64

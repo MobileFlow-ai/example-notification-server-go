@@ -67,7 +67,7 @@ Both are started as goroutines from `cmd/server/main.go` and shut down gracefull
 - **Interface-driven**: Core abstractions in `pkg/interfaces/`; mocks generated via `mockery` into `mocks/`
 - **Strategy pattern for delivery**: Multiple `Delivery` implementations; listener checks `CanDeliver()` then delegates
 - **Soft deletes**: Installations use `deleted_at` field
-- **HMAC sender filtering**: Prevents self-notifications using 30-day rolling keys
+- **HMAC self-message suppression**: Prevents self-notifications using 30-day rolling keys
 
 ### Configuration
 

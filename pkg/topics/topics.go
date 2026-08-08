@@ -3,7 +3,7 @@ package topics
 import (
 	"encoding/base64"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/xmtp/xmtpd/pkg/topic"
@@ -11,16 +11,18 @@ import (
 
 const V3_PREFIX = "/xmtp/mls/1/"
 
+var ErrTopicInvalid = errors.New("topic invalid")
+
 func ParseV3Topic(topicStr string) (*topic.Topic, error) {
 	topicStr = strings.TrimPrefix(topicStr, V3_PREFIX)
 	if !strings.HasSuffix(topicStr, "/proto") {
-		return nil, fmt.Errorf("invalid V3 topic: missing /proto suffix")
+		return nil, ErrTopicInvalid
 	}
 	topicStr = strings.TrimSuffix(topicStr, "/proto")
 
 	prefix, identifier, hasPrefix := strings.Cut(topicStr, "-")
 	if !hasPrefix || identifier == "" {
-		return nil, fmt.Errorf("invalid V3 topic: missing prefix or identifier")
+		return nil, ErrTopicInvalid
 	}
 
 	var kind topic.TopicKind
@@ -30,12 +32,12 @@ func ParseV3Topic(topicStr string) (*topic.Topic, error) {
 	case "w":
 		kind = topic.TopicKindWelcomeMessagesV1
 	default:
-		return nil, fmt.Errorf("invalid V3 topic: unknown prefix %q", prefix)
+		return nil, ErrTopicInvalid
 	}
 
 	identifierBytes, err := hex.DecodeString(strings.ToLower(identifier))
 	if err != nil {
-		return nil, fmt.Errorf("invalid V3 topic: bad hex identifier: %w", err)
+		return nil, ErrTopicInvalid
 	}
 
 	return topic.NewTopic(kind, identifierBytes), nil

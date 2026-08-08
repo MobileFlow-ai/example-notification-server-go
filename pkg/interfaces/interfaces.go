@@ -110,14 +110,38 @@ type Installation struct {
 }
 
 type Subscription struct {
-	Id             int64        `json:"-"`
-	CreatedAt      time.Time    `json:"created_at"`
-	InstallationId string       `json:"-"`
-	Topic          string       `json:"topic"`
-	TopicV4        *topic.Topic `json:"-"`
-	IsActive       bool         `json:"-"`
-	IsSilent       bool         `json:"is_silent"`
-	HmacKey        *HmacKey     `json:"-"`
+	Id                    int64        `json:"-"`
+	CreatedAt             time.Time    `json:"created_at"`
+	InstallationId        string       `json:"-"`
+	Topic                 string       `json:"topic"`
+	TopicV4               *topic.Topic `json:"-"`
+	IsActive              bool         `json:"-"`
+	IsSilent              bool         `json:"is_silent"`
+	ExpectedHmacKeyPeriod *int         `json:"-"`
+	HmacKey               *HmacKey     `json:"-"`
+	SecureRoute           *SecureRoute `json:"-"`
+}
+
+// SecureRoute contains only current-operation material decrypted inside the
+// Gate-8 vault boundary. It must never be serialized or logged.
+type SecureRoute struct {
+	LeaseID           []byte
+	RouteKey          []byte
+	RouteKeyEpoch     uint32
+	NoncePrefix       uint32
+	DeliverySequence  uint64
+	AliasDay          string
+	RouteAlias        []byte
+	ReceiveCapability []byte
+	LeaseExpiresAt    time.Time
+	ControlExpiresAt  time.Time
+	PolicyEpoch       uint64
+	WelcomeAuthorized bool
+	// WelcomeAuthorizationID and WelcomeEnvelopeDigest are opaque reservation
+	// material. They are finalized atomically with durable Welcome enqueue and
+	// must never be serialized outside the encrypted job.
+	WelcomeAuthorizationID []byte
+	WelcomeEnvelopeDigest  []byte
 }
 
 type SendRequest struct {
@@ -137,7 +161,7 @@ type sendRequestJSON struct {
 	IdempotencyKey string `json:"idempotency_key"`
 	Message        struct {
 		ContentTopic string `json:"content_topic"`
-		Message      []byte `json:"message"`
+		Message      []byte `json:"message,omitempty"`
 	} `json:"message"`
 	MessageContext MessageContext `json:"message_context"`
 	Installation   Installation   `json:"installation"`
@@ -156,7 +180,9 @@ func (r SendRequest) MarshalJSON() ([]byte, error) {
 		TopicBytesB64:  r.TopicBytesB64,
 	}
 	out.Message.ContentTopic = r.Topic
-	out.Message.Message = r.EncryptedMessage
+	if r.MessageContext.MessageType != topics.V3Welcome {
+		out.Message.Message = r.EncryptedMessage
+	}
 	return json.Marshal(out)
 }
 
@@ -168,7 +194,7 @@ type MessageContext struct {
 }
 
 func (m MessageContext) IsSender(hmacKey []byte) bool {
-	if m.SenderHmac == nil || m.HmacInputs == nil {
+	if !m.HasValidSenderHmac() || len(hmacKey) != sha256.Size {
 		return false
 	}
 	hmacHash := hmac.New(sha256.New, hmacKey)
@@ -177,9 +203,22 @@ func (m MessageContext) IsSender(hmacKey []byte) bool {
 	return hmac.Equal(*m.SenderHmac, expectedHmac)
 }
 
+func (m MessageContext) HasValidSenderHmac() bool {
+	return m.SenderHmac != nil &&
+		len(*m.SenderHmac) == sha256.Size &&
+		m.HmacInputs != nil
+}
+
 type HmacKey struct {
 	ThirtyDayPeriodsSinceEpoch int
 	Key                        []byte
+}
+
+func (k HmacKey) IsValid() bool {
+	const maxDatabasePeriod = int64(1<<31 - 1)
+	return k.ThirtyDayPeriodsSinceEpoch >= 0 &&
+		int64(k.ThirtyDayPeriodsSinceEpoch) <= maxDatabasePeriod &&
+		len(k.Key) == sha256.Size
 }
 
 type SubscriptionInput struct {
@@ -205,6 +244,25 @@ type Subscriptions interface {
 	Unsubscribe(ctx context.Context, installationId string, topics []*topic.Topic) error
 	GetSubscriptions(ctx context.Context, t *topic.Topic, thirtyDayPeriod int) ([]Subscription, error)
 	SubscribeWithMetadata(ctx context.Context, installationId string, subscriptions []SubscriptionInput) error
+}
+
+// WelcomeSubscriptions is deliberately separate from Subscriptions. A
+// listener only asks for a Welcome route when its backing store explicitly
+// implements exact, one-use outer-envelope correlation. Legacy implementations
+// therefore remain closed without a permissive compatibility path.
+type WelcomeSubscriptions interface {
+	GetWelcomeSubscriptions(
+		ctx context.Context,
+		t *topic.Topic,
+		outerEnvelopeDigest []byte,
+	) ([]WelcomeSubscription, error)
+}
+
+// WelcomeSubscription is returned as one atomic routing decision. It avoids a
+// second installation lookup after the authorization has been consumed.
+type WelcomeSubscription struct {
+	Installation Installation
+	Subscription Subscription
 }
 
 // Pluggable interface for sending push notifications

@@ -2,6 +2,7 @@ package logging
 
 import (
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -14,11 +15,13 @@ func CreateLogger(encoding string, level string) *zap.Logger {
 		OutputPaths:      []string{"stderr"},
 		ErrorOutputPaths: []string{"stderr"},
 		EncoderConfig: zapcore.EncoderConfig{
-			MessageKey:   "message",
-			LevelKey:     "level",
-			EncodeLevel:  zapcore.CapitalLevelEncoder,
-			TimeKey:      "time",
-			EncodeTime:   zapcore.ISO8601TimeEncoder,
+			MessageKey:  "message",
+			LevelKey:    "level",
+			EncodeLevel: zapcore.CapitalLevelEncoder,
+			TimeKey:     "time",
+			EncodeTime: func(value time.Time, encoder zapcore.PrimitiveArrayEncoder) {
+				encoder.AppendString(coarseLogTime(value))
+			},
 			NameKey:      "caller",
 			EncodeCaller: zapcore.ShortCallerEncoder,
 		},
@@ -26,6 +29,10 @@ func CreateLogger(encoding string, level string) *zap.Logger {
 
 	logger := zap.Must(cfg.Build())
 	return logger.Named("notifications-server")
+}
+
+func coarseLogTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02T15Z")
 }
 
 func getLevel(levelString string) zap.AtomicLevel {
