@@ -420,7 +420,7 @@ func TestDeliveryAuthorizationBindsPreviouslyOmittedFields(t *testing.T) {
 func requestWithA9Route() interfaces.SendRequest {
 	request := fullRequest()
 	snapshot := &interfaces.A9RouteSnapshot{
-		SubscriptionGeneration: 1,
+		SubscriptionGeneration:  1,
 		BindingVersion:          2,
 		AssertionStreamSequence: 3,
 		AssertionExpiresAt:      time.Unix(500, 600).UTC(),

@@ -736,19 +736,19 @@ func checkedA9PrivateServerOptions(
 		AllowUnspecifiedBind: config.AllowWildcardPrivateBind,
 		CertificatePath:      config.TLSCertificateFilePath,
 		PrivateKeyPath:       config.TLSPrivateKeyFilePath,
-		ReadHeaderTimeout:    time.Duration(
+		ReadHeaderTimeout: time.Duration(
 			config.ReadHeaderTimeoutSeconds,
 		) * time.Second,
-		ReadTimeout:          time.Duration(
+		ReadTimeout: time.Duration(
 			config.ReadTimeoutSeconds,
 		) * time.Second,
-		WriteTimeout:         time.Duration(
+		WriteTimeout: time.Duration(
 			config.WriteTimeoutSeconds,
 		) * time.Second,
-		IdleTimeout:          time.Duration(
+		IdleTimeout: time.Duration(
 			config.IdleTimeoutSeconds,
 		) * time.Second,
-		MaxHeaderBytes:       config.MaxHeaderBytes,
+		MaxHeaderBytes: config.MaxHeaderBytes,
 	}
 	if a9api.ValidatePrivateServerOptions(serverOptions) != nil {
 		return a9api.PrivateServerOptions{}, false

@@ -45,20 +45,20 @@ var (
 // bounded retry. The implementation encrypts the entire value before it
 // reaches PostgreSQL; callers must never log or otherwise serialize it.
 type SerializedDeliveryJob struct {
-	DeviceToken            string               `json:"device_token"`
-	Topic                  string               `json:"topic"`
-	ProviderTopic          []byte               `json:"provider_topic,omitempty"`
-	Payload                []byte               `json:"payload"`
-	PushType               string               `json:"push_type"`
-	Priority               int                  `json:"priority"`
-	Expiration             time.Time            `json:"expiration"`
-	TrafficClass           DeliveryTrafficClass `json:"traffic_class"`
-	PolicyEpoch            uint64               `json:"policy_epoch"`
-	RouteKeyEpoch          uint32               `json:"route_key_epoch"`
-	NoncePrefix            uint32               `json:"nonce_prefix"`
-	DeliverySequence       uint64               `json:"delivery_sequence"`
-	AliasDay               string               `json:"alias_day"`
-	RouteAlias             []byte               `json:"route_alias"`
+	DeviceToken            string                      `json:"device_token"`
+	Topic                  string                      `json:"topic"`
+	ProviderTopic          []byte                      `json:"provider_topic,omitempty"`
+	Payload                []byte                      `json:"payload"`
+	PushType               string                      `json:"push_type"`
+	Priority               int                         `json:"priority"`
+	Expiration             time.Time                   `json:"expiration"`
+	TrafficClass           DeliveryTrafficClass        `json:"traffic_class"`
+	PolicyEpoch            uint64                      `json:"policy_epoch"`
+	RouteKeyEpoch          uint32                      `json:"route_key_epoch"`
+	NoncePrefix            uint32                      `json:"nonce_prefix"`
+	DeliverySequence       uint64                      `json:"delivery_sequence"`
+	AliasDay               string                      `json:"alias_day"`
+	RouteAlias             []byte                      `json:"route_alias"`
 	WelcomeAuthorizationID []byte                      `json:"welcome_authorization_id,omitempty"`
 	WelcomeEnvelopeDigest  []byte                      `json:"welcome_envelope_digest,omitempty"`
 	A9                     *interfaces.A9RouteSnapshot `json:"a9,omitempty"`
@@ -97,9 +97,9 @@ type ClaimedDeliveryJob struct {
 }
 
 type a9DeliverySnapshotRow struct {
-	installationBindingID  []byte
-	sequencerEpoch         []byte
-	subscriptionGeneration sql.NullInt64
+	installationBindingID   []byte
+	sequencerEpoch          []byte
+	subscriptionGeneration  sql.NullInt64
 	bindingID               []byte
 	bindingVersion          sql.NullInt64
 	assertionHash           []byte
@@ -714,9 +714,9 @@ func (s *Store) enqueueDeliveryJobOnce(
 	}
 	queueBucket := deliveryQueueUtilizationBucket(queued+1, maxQueued)
 	var (
-		a9InstallationBindingID  any
-		a9SequencerEpoch         any
-		a9SubscriptionGeneration any
+		a9InstallationBindingID   any
+		a9SequencerEpoch          any
+		a9SubscriptionGeneration  any
 		a9BindingID               any
 		a9BindingVersion          any
 		a9AssertionHash           any
@@ -1655,19 +1655,19 @@ func (s *Store) ClaimDeliveryJobs(
 	var encryptedRows []encryptedJobRow
 	for rows.Next() {
 		var row encryptedJobRow
-			destinations := []any{
-				&row.jobID,
-				&row.leaseID,
-				&row.encrypted,
-				&row.attempts,
-				&row.expiresAt,
-				&row.traffic,
-			}
-			destinations = append(
-				destinations,
-				row.a9.scanDestinations()...,
-			)
-			if err = rows.Scan(destinations...); err != nil {
+		destinations := []any{
+			&row.jobID,
+			&row.leaseID,
+			&row.encrypted,
+			&row.attempts,
+			&row.expiresAt,
+			&row.traffic,
+		}
+		destinations = append(
+			destinations,
+			row.a9.scanDestinations()...,
+		)
+		if err = rows.Scan(destinations...); err != nil {
 			_ = rows.Close()
 			return nil, ErrDeliveryQueueUnavailable
 		}
@@ -1697,20 +1697,20 @@ func (s *Store) ClaimDeliveryJobs(
 			}
 			continue
 		}
-			var job SerializedDeliveryJob
-			decodeErr := json.Unmarshal(plaintext, &job)
-			zero(plaintext)
-			a9ShapeValid := row.a9.empty() || row.a9.complete()
-			a9ModeMatches := s.a9Enabled == row.a9.complete()
-			a9SnapshotMatches := (row.a9.empty() && job.A9 == nil) ||
-				row.a9.matches(job.A9)
-			if decodeErr != nil ||
-				validateSerializedDeliveryJob(job, now) != nil ||
-				!job.Expiration.UTC().Equal(row.expiresAt.UTC()) ||
-				!a9ShapeValid ||
-				!a9SnapshotMatches ||
-				(row.traffic.Valid &&
-					row.traffic.Int16 != int16(job.TrafficClass)) {
+		var job SerializedDeliveryJob
+		decodeErr := json.Unmarshal(plaintext, &job)
+		zero(plaintext)
+		a9ShapeValid := row.a9.empty() || row.a9.complete()
+		a9ModeMatches := s.a9Enabled == row.a9.complete()
+		a9SnapshotMatches := (row.a9.empty() && job.A9 == nil) ||
+			row.a9.matches(job.A9)
+		if decodeErr != nil ||
+			validateSerializedDeliveryJob(job, now) != nil ||
+			!job.Expiration.UTC().Equal(row.expiresAt.UTC()) ||
+			!a9ShapeValid ||
+			!a9SnapshotMatches ||
+			(row.traffic.Valid &&
+				row.traffic.Int16 != int16(job.TrafficClass)) {
 			if _, err = s.markDeliveryJobFinalTx(
 				ctx,
 				tx,
@@ -1718,20 +1718,20 @@ func (s *Store) ClaimDeliveryJobs(
 				DeliveryFinalMaterialInvalid,
 			); err != nil {
 				return nil, ErrDeliveryQueueUnavailable
-				}
-				continue
 			}
-			if !a9ModeMatches {
-				if _, err = s.markDeliveryJobFinalTx(
-					ctx,
-					tx,
-					row.jobID,
-					DeliveryFinalSafetyInvalidated,
-				); err != nil {
-					return nil, ErrDeliveryQueueUnavailable
-				}
-				continue
+			continue
+		}
+		if !a9ModeMatches {
+			if _, err = s.markDeliveryJobFinalTx(
+				ctx,
+				tx,
+				row.jobID,
+				DeliveryFinalSafetyInvalidated,
+			); err != nil {
+				return nil, ErrDeliveryQueueUnavailable
 			}
+			continue
+		}
 		if _, err = tx.ExecContext(
 			ctx,
 			`UPDATE hytch_push_vault.delivery_jobs

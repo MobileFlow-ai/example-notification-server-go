@@ -23,16 +23,16 @@ var (
 )
 
 type a9DeliveryTrustStub struct {
-	mu                sync.Mutex
-	sequence          uint64
-	hash              [32]byte
-	providerTopic     []byte
-	topicKeyEpoch     uint32
-	assertionExpires  time.Time
-	binding           [32]byte
-	acquisitions      int
-	evaluations       int
-	closes            int
+	mu               sync.Mutex
+	sequence         uint64
+	hash             [32]byte
+	providerTopic    []byte
+	topicKeyEpoch    uint32
+	assertionExpires time.Time
+	binding          [32]byte
+	acquisitions     int
+	evaluations      int
+	closes           int
 }
 
 func (trust *a9DeliveryTrustStub) AcquireCurrentTopicBindingLease(
@@ -287,9 +287,9 @@ func newA9DeliveryTestFixture(t *testing.T) *a9DeliveryTestFixture {
 	require.NotNil(t, control.Assertion)
 
 	snapshot := &interfaces.A9RouteSnapshot{
-		InstallationBindingID:  installation,
-		SequencerEpoch:         epoch,
-		SubscriptionGeneration: 1,
+		InstallationBindingID:   installation,
+		SequencerEpoch:          epoch,
+		SubscriptionGeneration:  1,
 		BindingID:               binding,
 		BindingVersion:          1,
 		AssertionHash:           control.AssertionHash,

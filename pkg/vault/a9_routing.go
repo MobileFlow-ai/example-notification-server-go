@@ -395,16 +395,16 @@ func (s *Store) discoverA9RouteCandidatesTx(
 				installationBindingID  []byte
 				sequencerEpoch         []byte
 				subscriptionGeneration int64
-				bindingID               []byte
-				bindingVersion          int64
-				assertionHash           []byte
-				assertionSequence       int64
-				topicKeyEpoch           int64
-				topicBinding            []byte
-				routeKeyEpoch           int64
-				keysetSequence          int64
-				keysetHash              []byte
-				watermarkSequence       int64
+				bindingID              []byte
+				bindingVersion         int64
+				assertionHash          []byte
+				assertionSequence      int64
+				topicKeyEpoch          int64
+				topicBinding           []byte
+				routeKeyEpoch          int64
+				keysetSequence         int64
+				keysetHash             []byte
+				watermarkSequence      int64
 			)
 			if err = rows.Scan(
 				&candidate.leaseID,
@@ -535,10 +535,10 @@ func (s *Store) loadA9Gate6RouteTx(
 		return routeRow{}, false, ErrStoreUnavailable
 	}
 	var (
-		installationLookup        []byte
-		agePolicy                int16
+		installationLookup      []byte
+		agePolicy               int16
 		installationPolicyEpoch int64
-		installationExpiresAt    time.Time
+		installationExpiresAt   time.Time
 		installationControl     time.Time
 	)
 	err := tx.QueryRowContext(

@@ -146,8 +146,8 @@ func NewPrivateTLSServer(
 		failed:               make(chan struct{}),
 	}
 	httpServer := &http.Server{
-		Addr:              options.BindAddress,
-		Handler:           server.failClosedRequestBoundary(
+		Addr: options.BindAddress,
+		Handler: server.failClosedRequestBoundary(
 			stripForwardingHeaders(handler),
 		),
 		TLSConfig:         tlsConfig,
