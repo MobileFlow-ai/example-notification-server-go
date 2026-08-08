@@ -349,7 +349,8 @@ func TestIncidentAccessIsEnvironmentScoped(t *testing.T) {
 	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT INTO hytch_push_vault.subscription_leases (
-		     lease_id, installation_lookup, route_identity, topic_lookup,
+		     lease_id, installation_lookup, installation_identity,
+		     route_identity, topic_lookup,
 		     lookup_key_epoch, encrypted_topic, encrypted_route_key,
 		     encrypted_hmac_keys, encrypted_receive_capability, environment,
 		     payload_schema, topic_kind, push_mode, state, generation,
@@ -357,8 +358,8 @@ func TestIncidentAccessIsEnvironmentScoped(t *testing.T) {
 		     encryption_key_version, issued_at, refreshed_at, expires_at,
 		     control_expires_at
 		 ) VALUES (
-		     $1,$2,$3,$4,1,$5,$5,$5,$5,$6,1,1,1,$7,1,1,1,$5,1,
-		     $8,$8,$9,$10
+		     $1,$2,$11,$3,$4,1,$5,$5,$5,$5,$6,1,1,1,$7,1,1,1,
+		     $5,1,$8,$8,$9,$10
 		 )`,
 		leaseID,
 		installationLookup,
@@ -370,6 +371,7 @@ func TestIncidentAccessIsEnvironmentScoped(t *testing.T) {
 		createdAt,
 		now.Add(time.Hour),
 		controlExpiresAt,
+		repeatedBytes(32, 0xb2),
 	)
 	require.NoError(t, err)
 	_, err = db.ExecContext(
@@ -489,7 +491,8 @@ func TestRetentionSweeperIntegrationAndFailClosedHealth(t *testing.T) {
 	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT INTO hytch_push_vault.subscription_leases (
-		     lease_id, installation_lookup, topic_lookup, lookup_key_epoch,
+		     lease_id, installation_lookup, installation_identity,
+		     topic_lookup, lookup_key_epoch,
 		     encrypted_topic, encrypted_route_key, encrypted_hmac_keys,
 		     encrypted_receive_capability, environment, payload_schema,
 		     topic_kind, push_mode, state, generation, policy_epoch,
@@ -497,7 +500,8 @@ func TestRetentionSweeperIntegrationAndFailClosedHealth(t *testing.T) {
 		     issued_at, refreshed_at, expires_at,
 		     control_expires_at, route_identity
 		 ) VALUES (
-		     $1,$2,$3,1,$4,$4,$4,$4,1,1,1,2,2,1,1,1,$4,1,$5,$5,$6,$7,$8
+		     $1,$2,$9,$3,1,$4,$4,$4,$4,1,1,1,2,2,1,1,1,$4,1,
+		     $5,$5,$6,$7,$8
 		 )`,
 		leaseID,
 		installationLookup,
@@ -507,6 +511,7 @@ func TestRetentionSweeperIntegrationAndFailClosedHealth(t *testing.T) {
 		expiredAt,
 		expiredRefresh.Add(30*time.Second),
 		repeatedBytes(32, 8),
+		repeatedBytes(32, 17),
 	)
 	require.NoError(t, err)
 

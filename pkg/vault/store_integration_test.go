@@ -186,6 +186,57 @@ func testTopic(t *testing.T, kind topicpkg.TopicKind, value byte) *topicpkg.Topi
 	return topicpkg.NewTopic(kind, bytes.Repeat([]byte{value}, 16))
 }
 
+func TestLegacyRefreshCreatesNoStateWhenA9Enabled(t *testing.T) {
+	requireVaultIntegrationTests(t)
+	fixture, db := newSignedStoreFixture(t)
+	const period = uint32(688)
+	conversation := testTopic(
+		t,
+		topicpkg.TopicKindGroupMessagesV1,
+		0x10,
+	)
+	control := fixture.policy(
+		t,
+		1,
+		authority.PolicyStateActive,
+		authority.AgePolicyAdult,
+		fixture.incarnationID,
+	)
+	request := fixture.refresh(
+		t,
+		1,
+		control,
+		fixture.subscription(
+			t,
+			conversation,
+			0x20,
+			1,
+			period,
+			authority.PushModeAlertAllowed,
+			1,
+		),
+	)
+	fixture.store.a9Enabled = true
+	fixture.store.a9Trust = &A9TrustHandle{}
+
+	for _, table := range []string{
+		"installation_states",
+		"route_key_history",
+		"subscription_leases",
+	} {
+		assertTableCount(t, db, table, 0)
+	}
+	_, err := fixture.store.Refresh(t.Context(), request)
+	require.ErrorIs(t, err, ErrStoreUnavailable)
+	for _, table := range []string{
+		"installation_states",
+		"route_key_history",
+		"subscription_leases",
+	} {
+		assertTableCount(t, db, table, 0)
+	}
+}
+
 func TestSecureStoreAtomicTopicListsEncryptedRoutingAndSequences(t *testing.T) {
 	requireVaultIntegrationTests(t)
 	fixture, db := newSignedStoreFixture(t)

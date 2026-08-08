@@ -100,6 +100,8 @@ type StoreOptions struct {
 	AuthorityKeys           map[string]ed25519.PublicKey
 	TeenConversationEnabled bool
 	WelcomeEnabled          bool
+	A9Enabled               bool
+	A9Trust                 *A9TrustHandle
 	Now                     func() time.Time
 	Random                  io.Reader
 }
@@ -115,6 +117,8 @@ type Store struct {
 	authorityKeys           map[string]ed25519.PublicKey
 	teenConversationEnabled bool
 	welcomeEnabled          bool
+	a9Enabled               bool
+	a9Trust                 *A9TrustHandle
 	now                     func() time.Time
 	random                  io.Reader
 	aggregateRandom         io.Reader
@@ -122,6 +126,7 @@ type Store struct {
 
 func NewStore(db *sql.DB, opts StoreOptions) (*Store, error) {
 	if opts.WelcomeEnabled ||
+		(opts.A9Enabled != (opts.A9Trust != nil)) ||
 		db == nil || opts.Encryption == nil || opts.Lookup == nil ||
 		len(opts.AuthorityKeys) == 0 {
 		return nil, ErrStoreUnavailable
@@ -160,6 +165,8 @@ func NewStore(db *sql.DB, opts StoreOptions) (*Store, error) {
 		authorityKeys:           opts.AuthorityKeys,
 		teenConversationEnabled: opts.TeenConversationEnabled,
 		welcomeEnabled:          false,
+		a9Enabled:               opts.A9Enabled,
+		a9Trust:                 opts.A9Trust,
 		now:                     now,
 		random:                  random,
 		aggregateRandom:         rand.Reader,
@@ -167,6 +174,9 @@ func NewStore(db *sql.DB, opts StoreOptions) (*Store, error) {
 }
 
 func (s *Store) Refresh(ctx context.Context, request RefreshRequest) (*RefreshResult, error) {
+	if s == nil || s.a9Enabled {
+		return nil, ErrStoreUnavailable
+	}
 	now := s.now().UTC()
 	normalized, err := s.validateRefresh(request, now)
 	if err != nil {
@@ -837,6 +847,12 @@ func (s *Store) upsertLease(
 	subscription normalizedSubscription,
 	existing *existingLease,
 ) error {
+	installationIdentity, err := s.installationDeletionIdentity(
+		installationID,
+	)
+	if err != nil {
+		return ErrStoreUnavailable
+	}
 	routeIdentity, err := s.routeHistoryIdentity(
 		installationID,
 		subscription.topic,
@@ -1015,8 +1031,8 @@ func (s *Store) upsertLease(
 	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO hytch_push_vault.subscription_leases AS lease (
-		     lease_id, installation_lookup, route_identity, topic_lookup,
-		     lookup_key_epoch,
+		     lease_id, installation_lookup, installation_identity,
+		     route_identity, topic_lookup, lookup_key_epoch,
 		     encrypted_topic, encrypted_route_key, encrypted_hmac_keys,
 		     encrypted_receive_capability, environment, payload_schema,
 		     topic_kind, push_mode, state, generation, policy_epoch,
@@ -1024,11 +1040,12 @@ func (s *Store) upsertLease(
 		     encryption_key_version, issued_at, refreshed_at, expires_at,
 		     control_expires_at, revoked_at
 		 ) VALUES (
-		     $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,$13,$14,$15,
-		     $16,$17,$18,$19,$20,$21,$22,NULL
+		     $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1,$12,$13,$14,$15,
+		     $16,$17,$18,$19,$20,$21,$22,$23,NULL
 		 )
 		 ON CONFLICT (lease_id) DO UPDATE SET
 		     installation_lookup = EXCLUDED.installation_lookup,
+		     installation_identity = EXCLUDED.installation_identity,
 		     route_identity = EXCLUDED.route_identity,
 		     topic_lookup = EXCLUDED.topic_lookup,
 		     lookup_key_epoch = EXCLUDED.lookup_key_epoch,
@@ -1054,6 +1071,7 @@ func (s *Store) upsertLease(
 			 WHERE lease.environment = EXCLUDED.environment`,
 		leaseID,
 		installationLookup,
+		installationIdentity,
 		routeIdentity,
 		topicLookup,
 		int64(lookupEpoch),
