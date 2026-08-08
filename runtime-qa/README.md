@@ -20,8 +20,15 @@ Prerequisites are Go 1.26, Docker, Docker Compose v2, and `curl`.
 make runtime-qa
 ```
 
-The target always removes its containers and volume on exit. For interactive
-inspection, use `make runtime-qa-up` and finish with `make runtime-qa-down`.
+`make runtime-qa-full` runs the same harness with
+`VAULT_INTEGRATION_TESTS=1`, adding the opt-in A9 CAS delivery/routing
+integration tests to the serial suite. The default target skips those tests,
+so a default green does not prove the A9 CAS layer; use the full target for
+any A9-related claim or merge gate.
+
+Both targets always remove their containers and volume on exit. For
+interactive inspection, use `make runtime-qa-up` and finish with
+`make runtime-qa-down`.
 
 ## Expected evidence
 

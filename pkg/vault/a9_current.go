@@ -165,7 +165,6 @@ func (s *Store) requireA9CurrentRouteTx(
 	assertion, current, err := s.loadA9CurrentAssertionTx(
 		ctx,
 		tx,
-		leaseID,
 		snapshot,
 		state.databaseNow,
 	)
@@ -524,10 +523,18 @@ type a9CurrentAssertion struct {
 	topicCommitmentKeyID  []byte
 }
 
+// loadA9CurrentAssertionTx intentionally does not constrain
+// a9_assertions.lease_id: that column holds the signed assertion's
+// modern-api roster-lease reference, while the route row's lease_id is the
+// bridge-generated Gate-6 vault lease — disjoint namespaces that no code
+// path ever maps onto each other (the replacement request carries no
+// assertion lease id). The route-to-assertion linkage the contract requires
+// is enforced by assertion_hash plus the identity predicates below, and the
+// route row itself was already matched and locked field-for-field by
+// lockA9CurrentRouteProjectionTx, including its own lease_id.
 func (s *Store) loadA9CurrentAssertionTx(
 	ctx context.Context,
 	tx *sql.Tx,
-	leaseID []byte,
 	snapshot *interfaces.A9RouteSnapshot,
 	now time.Time,
 ) (a9CurrentAssertion, bool, error) {
@@ -545,11 +552,10 @@ func (s *Store) loadA9CurrentAssertionTx(
 		    AND assertion_stream_sequence = $5
 		    AND binding_id = $6
 		    AND binding_version = $7
-		    AND lease_id = $8
-		    AND topic_key_epoch = $9
-		    AND topic_binding = $10
-		    AND keyset_sequence = $11
-		    AND keyset_hash = $12`,
+		    AND topic_key_epoch = $8
+		    AND topic_binding = $9
+		    AND keyset_sequence = $10
+		    AND keyset_hash = $11`,
 		s.environmentID,
 		snapshot.AssertionHash[:],
 		snapshot.InstallationBindingID[:],
@@ -557,7 +563,6 @@ func (s *Store) loadA9CurrentAssertionTx(
 		int64(snapshot.AssertionStreamSequence),
 		snapshot.BindingID[:],
 		int64(snapshot.BindingVersion),
-		leaseID,
 		int64(snapshot.TopicKeyEpoch),
 		snapshot.TopicBinding[:],
 		int64(snapshot.KeysetSequence),

@@ -51,7 +51,17 @@ compose exec -T bridge sh -eu -c '
   test "$BRIDGE_WELCOME_ENABLED" = false
 '
 
+# RUNTIME_QA_INCLUDE_OPT_IN=1 additionally runs the VAULT_INTEGRATION_TESTS
+# surface (the A9 CAS delivery/routing integration tests). The default run
+# skips those tests, so a default green does not prove the A9 CAS layer —
+# that gap is how an always-red A9 surface went unnoticed until 2026-08-06.
+opt_in_vault_integration=''
+if [ "${RUNTIME_QA_INCLUDE_OPT_IN:-0}" = 1 ]; then
+  opt_in_vault_integration=1
+fi
+
 BRIDGE_TEST_DSN='postgres://bridge_runtime_qa:xmtp_runtime_qa@127.0.0.1:15432/bridge_runtime_qa?sslmode=disable' \
+  VAULT_INTEGRATION_TESTS="$opt_in_vault_integration" \
   go test -buildvcs=false -mod=readonly -p 1 -count=1 ./...
 
 go run ./runtime-qa/cmd/gate6check \
@@ -60,4 +70,8 @@ go run ./runtime-qa/cmd/gate6check \
 cmp runtime-qa/expected/gate6.jsonl "$vector_result_file"
 
 compose ps
-printf '%s\n' 'runtime QA passed: postgres=15432 bridge=18080 welcome=false'
+if [ -n "$opt_in_vault_integration" ]; then
+  printf '%s\n' 'runtime QA passed (with opt-in vault integration): postgres=15432 bridge=18080 welcome=false'
+else
+  printf '%s\n' 'runtime QA passed: postgres=15432 bridge=18080 welcome=false'
+fi
