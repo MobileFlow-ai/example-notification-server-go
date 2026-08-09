@@ -29,6 +29,20 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 			s.environmentID != environmentProduction) {
 		return ErrStoreUnavailable
 	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelSerializable,
+		ReadOnly:  true,
+	})
+	if err != nil {
+		return ErrStoreUnavailable
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(
+		ctx,
+		`SET LOCAL search_path = pg_catalog`,
+	); err != nil {
+		return ErrStoreUnavailable
+	}
 
 	var (
 		relationValid          bool
@@ -44,7 +58,7 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 		noEnabledEventHooks    bool
 		schemaPrivilegesSafe   bool
 	)
-	if err := s.db.QueryRowContext(
+	if err = tx.QueryRowContext(
 		ctx,
 		`WITH audit_relation AS (
 		     SELECT relation.*
@@ -82,6 +96,11 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 		        AND routine.proname =
 		            'purge_expired_access_audit_production'
 		        AND routine.pronargs = 0
+		 ),
+		 server_version AS (
+		     SELECT pg_catalog.current_setting(
+		                'server_version_num'
+		            )::pg_catalog.int4 AS number
 		 ),
 		 expected_column (
 		     column_name,
@@ -140,6 +159,49 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 		             'pg_catalog.date'::pg_catalog.regtype
 		         )
 		 ),
+		 expected_not_null (column_number, constraint_definition) AS (
+		     VALUES
+		         (
+		             1::pg_catalog.int2,
+		             'NOT NULL event_id'
+		         ),
+		         (
+		             2::pg_catalog.int2,
+		             'NOT NULL request_id'
+		         ),
+		         (
+		             3::pg_catalog.int2,
+		             'NOT NULL environment'
+		         ),
+		         (
+		             4::pg_catalog.int2,
+		             'NOT NULL actor'
+		         ),
+		         (
+		             5::pg_catalog.int2,
+		             'NOT NULL purpose'
+		         ),
+		         (
+		             6::pg_catalog.int2,
+		             'NOT NULL data_class'
+		         ),
+		         (
+		             7::pg_catalog.int2,
+		             'NOT NULL coarse_event_hour'
+		         ),
+		         (
+		             8::pg_catalog.int2,
+		             'NOT NULL action'
+		         ),
+		         (
+		             9::pg_catalog.int2,
+		             'NOT NULL result_count_bucket'
+		         ),
+		         (
+		             10::pg_catalog.int2,
+		             'NOT NULL expires_on'
+		         )
+		 ),
 		 expected_trigger (trigger_name, trigger_type) AS (
 		     VALUES
 		         (
@@ -158,32 +220,43 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 		 expected_check (
 		     constraint_name,
 		     column_numbers,
-		     constraint_expression
+		     constraint_definition_pg13,
+		     constraint_definition_pg18
 		 ) AS (
 		     VALUES
 		         (
 		             'access_audit_event_id_check',
 		             ARRAY[1]::pg_catalog.int2[],
-		             'octet_length(event_id) = 16'
+		             'CHECK ((octet_length(event_id) = 16))',
+		             'CHECK ((octet_length(event_id) = 16))'
 		         ),
 		         (
 		             'access_audit_environment_check',
 		             ARRAY[3]::pg_catalog.int2[],
-		             'environment = ANY (ARRAY[1, 2])'
+		             'CHECK ((environment = ANY (ARRAY[1, 2])))',
+		             'CHECK ((environment = ANY (ARRAY[1, 2])))'
 		         ),
 		         (
 		             'access_audit_coarse_event_hour_check',
 		             ARRAY[7]::pg_catalog.int2[],
-		             'date_trunc(''hour''::text, ' ||
+		             'CHECK ((date_trunc(''hour''::text, ' ||
 		                 'timezone(''UTC''::text, coarse_event_hour)) = ' ||
-		                 'timezone(''UTC''::text, coarse_event_hour)'
+		                 'timezone(''UTC''::text, coarse_event_hour)))',
+		             'CHECK ((date_trunc(''hour''::text, ' ||
+		                 '(coarse_event_hour AT TIME ZONE ' ||
+		                 '''UTC''::text)) = ' ||
+		                 '(coarse_event_hour AT TIME ZONE ' ||
+		                 '''UTC''::text)))'
 		         ),
 		         (
 		             'access_audit_check',
 		             ARRAY[10, 7]::pg_catalog.int2[],
-		             'expires_on <= ' ||
-		                 '(timezone(''UTC''::text, coarse_event_hour)' ||
-		                 '::date + 180)'
+		             'CHECK ((expires_on <= ' ||
+		                 '((timezone(''UTC''::text, coarse_event_hour))' ||
+		                 '::date + 180)))',
+		             'CHECK ((expires_on <= ' ||
+		                 '(((coarse_event_hour AT TIME ZONE ' ||
+		                 '''UTC''::text))::date + 180)))'
 		         )
 		 )
 		 SELECT
@@ -313,20 +386,107 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 		     ), FALSE),
 		     COALESCE((
 		         SELECT
-			             pg_catalog.count(*) = 6 AND
-			             pg_catalog.count(*) FILTER (
-			                 WHERE constraint_record.conname =
-			                       'access_audit_pkey'
-			                   AND constraint_record.contype = 'p'
-			                   AND constraint_record.conkey =
-			                       ARRAY[1]::pg_catalog.int2[]
-			             ) = 1 AND
-			             pg_catalog.count(*) FILTER (
-			                 WHERE constraint_record.conname =
-			                       'access_audit_request_id_environment_fkey'
-			                   AND constraint_record.contype = 'f'
-			                   AND constraint_record.conkey =
-			                       ARRAY[2, 3]::pg_catalog.int2[]
+		             pg_catalog.count(*) FILTER (
+		                 WHERE constraint_record.contype IN ('p', 'f', 'c')
+		             ) = 6 AND
+		             (
+		                 (
+		                     version.number >= 130000 AND
+		                     version.number < 140000 AND
+		                     pg_catalog.count(*) = 6 AND
+		                     pg_catalog.count(*) FILTER (
+		                         WHERE constraint_record.contype = 'n'
+		                     ) = 0
+		                 ) OR (
+		                     version.number >= 180000 AND
+		                     version.number < 190000 AND
+		                     pg_catalog.count(*) = 16 AND
+		                     pg_catalog.count(*) FILTER (
+		                         WHERE constraint_record.contype = 'n'
+		                     ) = 10 AND
+		                     pg_catalog.count(
+		                         DISTINCT constraint_record.conkey
+		                     ) FILTER (
+		                         WHERE constraint_record.contype = 'n'
+		                     ) = 10 AND
+		                     pg_catalog.count(*) FILTER (
+		                         WHERE constraint_record.contype = 'n'
+		                           AND constraint_record.convalidated
+		                           AND COALESCE(
+		                               (
+		                                   pg_catalog.to_jsonb(
+		                                       constraint_record
+		                                   )->>'conenforced'
+		                               )::pg_catalog.bool,
+		                               FALSE
+		                           )
+		                           AND NOT COALESCE(
+		                               (
+		                                   pg_catalog.to_jsonb(
+		                                       constraint_record
+		                                   )->>'conperiod'
+		                               )::pg_catalog.bool,
+		                               TRUE
+		                           )
+		                           AND NOT constraint_record.condeferrable
+		                           AND NOT constraint_record.condeferred
+		                           AND constraint_record.conislocal
+		                           AND constraint_record.coninhcount = 0
+		                           AND NOT constraint_record.connoinherit
+		                           AND constraint_record.conparentid = 0
+		                           AND constraint_record.contypid = 0
+		                           AND constraint_record.conindid = 0
+		                           AND constraint_record.confrelid = 0
+		                           AND constraint_record.conbin IS NULL
+		                           AND EXISTS (
+		                               SELECT 1
+		                                 FROM expected_not_null AS expected
+		                                WHERE constraint_record.conkey =
+		                                      ARRAY[expected.column_number]
+		                                          ::pg_catalog.int2[]
+		                                  AND expected.constraint_definition =
+		                                      pg_catalog.pg_get_constraintdef(
+		                                          constraint_record.oid,
+		                                          FALSE
+		                                      )
+		                           )
+		                     ) = 10 AND
+		                     COALESCE(
+		                         pg_catalog.bool_and(
+		                             COALESCE(
+		                                 (
+		                                     pg_catalog.to_jsonb(
+		                                         constraint_record
+		                                     )->>'conenforced'
+		                                 )::pg_catalog.bool,
+		                                 FALSE
+		                             ) AND
+		                             NOT COALESCE(
+		                                 (
+		                                     pg_catalog.to_jsonb(
+		                                         constraint_record
+		                                     )->>'conperiod'
+		                                 )::pg_catalog.bool,
+		                                 TRUE
+		                             )
+		                         ),
+		                         FALSE
+		                     )
+		                 )
+		             ) AND
+		             pg_catalog.count(*) FILTER (
+		                 WHERE constraint_record.conname =
+		                       'access_audit_pkey'
+		                   AND constraint_record.contype = 'p'
+		                   AND constraint_record.conkey =
+		                       ARRAY[1]::pg_catalog.int2[]
+		             ) = 1 AND
+		             pg_catalog.count(*) FILTER (
+		                 WHERE constraint_record.conname =
+		                       'access_audit_request_id_environment_fkey'
+		                   AND constraint_record.contype = 'f'
+		                   AND constraint_record.conkey =
+		                       ARRAY[2, 3]::pg_catalog.int2[]
 		                   AND constraint_record.confrelid =
 		                       'hytch_push_vault.access_requests'
 		                           ::pg_catalog.regclass
@@ -336,42 +496,62 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 		                   AND constraint_record.confupdtype = 'a'
 		                   AND constraint_record.confdeltype = 'a'
 		             ) = 1 AND
-			             pg_catalog.count(*) FILTER (
-			                 WHERE constraint_record.contype = 'c'
-			                   AND EXISTS (
-			                       SELECT 1
-			                         FROM expected_check AS expected
-			                        WHERE expected.constraint_name =
-			                              constraint_record.conname
-			                          AND expected.column_numbers =
-			                              constraint_record.conkey
-			                          AND expected.constraint_expression =
-			                              pg_catalog.pg_get_expr(
-			                                  constraint_record.conbin,
-			                                  constraint_record.conrelid,
-			                                  TRUE
-			                              )
-			                   )
-			             ) = 4 AND
-			             COALESCE(pg_catalog.bool_and(
-			                 constraint_record.convalidated AND
-			                 NOT constraint_record.condeferrable AND
-			                 NOT constraint_record.condeferred AND
-			                 constraint_record.conislocal AND
-			                 constraint_record.coninhcount = 0 AND
-			                 (
-			                     (
-			                         constraint_record.contype IN ('p', 'f') AND
-			                         constraint_record.connoinherit
-			                     ) OR (
-			                         constraint_record.contype = 'c' AND
-			                         NOT constraint_record.connoinherit
-			                     )
-			                 )
-			             ), FALSE)
+		             pg_catalog.count(*) FILTER (
+		                 WHERE constraint_record.contype = 'c'
+		                   AND EXISTS (
+		                       SELECT 1
+		                         FROM expected_check AS expected
+		                        WHERE expected.constraint_name =
+		                              constraint_record.conname
+		                          AND expected.column_numbers =
+		                              constraint_record.conkey
+		                          AND (
+		                              (
+		                                  version.number >= 130000 AND
+		                                  version.number < 140000 AND
+		                                  expected.constraint_definition_pg13 =
+		                                      pg_catalog.pg_get_constraintdef(
+		                                          constraint_record.oid,
+		                                          FALSE
+		                                      )
+		                              ) OR (
+		                                  version.number >= 180000 AND
+		                                  version.number < 190000 AND
+		                                  expected.constraint_definition_pg18 =
+		                                      pg_catalog.pg_get_constraintdef(
+		                                          constraint_record.oid,
+		                                          FALSE
+		                                      )
+		                              )
+		                          )
+		                   )
+		             ) = 4 AND
+		             COALESCE(
+		                 pg_catalog.bool_and(
+		                     constraint_record.convalidated AND
+		                     NOT constraint_record.condeferrable AND
+		                     NOT constraint_record.condeferred AND
+		                     constraint_record.conislocal AND
+		                     constraint_record.coninhcount = 0 AND
+		                     (
+		                         (
+		                             constraint_record.contype IN ('p', 'f') AND
+		                             constraint_record.connoinherit
+		                         ) OR (
+		                             constraint_record.contype = 'c' AND
+		                             NOT constraint_record.connoinherit
+		                         )
+		                     )
+		                 ) FILTER (
+		                     WHERE constraint_record.contype IN ('p', 'f', 'c')
+		                 ),
+		                 FALSE
+		             )
 		           FROM pg_catalog.pg_constraint AS constraint_record
 		           JOIN audit_relation AS audit
 		             ON audit.oid = constraint_record.conrelid
+		           CROSS JOIN server_version AS version
+		          GROUP BY version.number
 		     ), FALSE),
 		     (
 		         SELECT pg_catalog.count(*)
@@ -581,7 +761,7 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 	}
 
 	var restrictedRuntimeRole bool
-	if err := s.db.QueryRowContext(
+	if err = tx.QueryRowContext(
 		ctx,
 		`WITH protected_owners AS (
 		     SELECT relation.relowner AS owner
@@ -735,6 +915,9 @@ func (s *Store) RequireAccessAuditBarrier(ctx context.Context) error {
 	}
 	if !restrictedRuntimeRole {
 		return ErrAccessAuditBarrierInvalid
+	}
+	if err = tx.Commit(); err != nil {
+		return ErrStoreUnavailable
 	}
 	return nil
 }

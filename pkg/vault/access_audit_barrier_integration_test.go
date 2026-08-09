@@ -36,6 +36,73 @@ func TestAccessAuditBarrierRequiresRestrictedRuntimeRole(t *testing.T) {
 	}
 }
 
+func TestAccessAuditBarrierPinsCatalogSearchPath(t *testing.T) {
+	requireVaultIntegrationTests(t)
+	db := testdb.CreateTestDb(t)
+	role := createAccessAuditRuntimeRole(
+		t,
+		db,
+		environmentDevelopment,
+	)
+	execAccessAuditTamperSQL(
+		t,
+		db,
+		`CREATE SCHEMA barrier_shadow;
+		 CREATE FUNCTION barrier_shadow.octet_length(BYTEA)
+		 RETURNS INTEGER
+		 LANGUAGE SQL
+		 IMMUTABLE
+		 STRICT
+		 AS $function$
+		     SELECT 16
+		 $function$;
+		 SET search_path = barrier_shadow, pg_catalog`,
+	)
+	store := &Store{
+		db:            db,
+		environmentID: environmentDevelopment,
+	}
+	require.NoError(
+		t,
+		runAccessAuditBarrierAsRole(t, db, store, role),
+	)
+}
+
+func TestAccessAuditBarrierAcceptsEquivalentPG18NotNullNames(t *testing.T) {
+	requireVaultIntegrationTests(t)
+	db := testdb.CreateTestDb(t)
+	var serverVersion int
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT pg_catalog.current_setting(
+		             'server_version_num'
+		         )::pg_catalog.int4`,
+	).Scan(&serverVersion))
+	if serverVersion < 180000 || serverVersion >= 190000 {
+		t.Skip("PostgreSQL 18 named NOT NULL catalog case")
+	}
+	role := createAccessAuditRuntimeRole(
+		t,
+		db,
+		environmentDevelopment,
+	)
+	execAccessAuditTamperSQL(
+		t,
+		db,
+		`ALTER TABLE hytch_push_vault.access_audit
+		     RENAME CONSTRAINT access_audit_actor_not_null
+		     TO restored_actor_not_null`,
+	)
+	store := &Store{
+		db:            db,
+		environmentID: environmentDevelopment,
+	}
+	require.NoError(
+		t,
+		runAccessAuditBarrierAsRole(t, db, store, role),
+	)
+}
+
 func TestAccessAuditBarrierRejectsRuntimeACLDrift(t *testing.T) {
 	requireVaultIntegrationTests(t)
 	testCases := []struct {
@@ -457,6 +524,55 @@ func TestAccessAuditBarrierRejectsCatalogTampering(t *testing.T) {
 			},
 		},
 		{
+			name: "unenforced event identifier constraint",
+			tamper: func(t *testing.T, db *sql.DB) {
+				var serverVersion int
+				require.NoError(t, db.QueryRowContext(
+					t.Context(),
+					`SELECT pg_catalog.current_setting(
+					             'server_version_num'
+					         )::pg_catalog.int4`,
+				).Scan(&serverVersion))
+				if serverVersion < 180000 || serverVersion >= 190000 {
+					t.Skip("PostgreSQL 18 NOT ENFORCED catalog case")
+				}
+				execAccessAuditTamperSQL(
+					t,
+					db,
+					`ALTER TABLE hytch_push_vault.access_audit
+					     DROP CONSTRAINT access_audit_event_id_check;
+					 ALTER TABLE hytch_push_vault.access_audit
+					     ADD CONSTRAINT access_audit_event_id_check
+					     CHECK (octet_length(event_id) = 16)
+					     NOT ENFORCED`,
+				)
+			},
+		},
+		{
+			name: "shadowed event identifier function",
+			tamper: func(t *testing.T, db *sql.DB) {
+				execAccessAuditTamperSQL(
+					t,
+					db,
+					`CREATE SCHEMA barrier_shadow;
+					 CREATE FUNCTION barrier_shadow.octet_length(BYTEA)
+					 RETURNS INTEGER
+					 LANGUAGE SQL
+					 IMMUTABLE
+					 STRICT
+					 AS $function$
+					     SELECT 16
+					 $function$;
+					 SET search_path = barrier_shadow, pg_catalog;
+					 ALTER TABLE hytch_push_vault.access_audit
+					     DROP CONSTRAINT access_audit_event_id_check;
+					 ALTER TABLE hytch_push_vault.access_audit
+					     ADD CONSTRAINT access_audit_event_id_check
+					     CHECK (octet_length(event_id) = 16)`,
+				)
+			},
+		},
+		{
 			name: "weakened coarse hour constraint",
 			tamper: func(t *testing.T, db *sql.DB) {
 				execAccessAuditTamperSQL(
@@ -489,6 +605,96 @@ func TestAccessAuditBarrierRejectsCatalogTampering(t *testing.T) {
 					                     AT TIME ZONE 'UTC'
 					             )::date + 365
 					     )`,
+				)
+			},
+		},
+		{
+			name: "unvalidated named not null constraint",
+			tamper: func(t *testing.T, db *sql.DB) {
+				var serverVersion int
+				require.NoError(t, db.QueryRowContext(
+					t.Context(),
+					`SELECT pg_catalog.current_setting(
+					             'server_version_num'
+					         )::pg_catalog.int4`,
+				).Scan(&serverVersion))
+				if serverVersion < 180000 || serverVersion >= 190000 {
+					t.Skip("PostgreSQL 18 named NOT NULL catalog case")
+				}
+				execAccessAuditTamperSQL(
+					t,
+					db,
+					`ALTER TABLE hytch_push_vault.access_audit
+					     ALTER COLUMN actor DROP NOT NULL;
+					 WITH utc_clock AS (
+					     SELECT date_trunc(
+					                'hour',
+					                pg_catalog.clock_timestamp()
+					                    AT TIME ZONE 'UTC'
+					            ) AT TIME ZONE 'UTC' AS coarse_hour
+					 ), request_row AS (
+					     INSERT INTO hytch_push_vault.access_requests (
+					         request_id,
+					         environment,
+					         purpose,
+					         data_class,
+					         requester_actor,
+					         ticket_reference,
+					         hypothesis,
+					         window_start,
+					         window_end,
+					         coarse_created_hour,
+					         state
+					     )
+					     SELECT decode(
+					                '11111111111111111111111111111111',
+					                'hex'
+					            ),
+					            1,
+					            1,
+					            1,
+					            'requester:not-null-test',
+					            'incident:not-null-test',
+					            1,
+					            coarse_hour - INTERVAL '1 hour',
+					            coarse_hour,
+					            coarse_hour,
+					            4
+					       FROM utc_clock
+					     RETURNING request_id, environment
+					 )
+					 INSERT INTO hytch_push_vault.access_audit (
+					     event_id,
+					     request_id,
+					     environment,
+					     actor,
+					     purpose,
+					     data_class,
+					     coarse_event_hour,
+					     action,
+					     result_count_bucket,
+					     expires_on
+					 )
+					 SELECT decode(
+					            '22222222222222222222222222222222',
+					            'hex'
+					        ),
+					        request_row.request_id,
+					        request_row.environment,
+					        NULL,
+					        1,
+					        1,
+					        utc_clock.coarse_hour,
+					        1,
+					        0,
+					        (
+					            utc_clock.coarse_hour AT TIME ZONE 'UTC'
+					        )::DATE + 180
+					   FROM request_row
+					   CROSS JOIN utc_clock;
+					 ALTER TABLE hytch_push_vault.access_audit
+					     ADD CONSTRAINT access_audit_actor_not_null
+					     NOT NULL actor NOT VALID`,
 				)
 			},
 		},
