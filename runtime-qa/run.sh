@@ -8,8 +8,21 @@ http_result_file="${TMPDIR:-/tmp}/xmtp-bridge-runtime-qa-http.$$.txt"
 schema_result_file="${TMPDIR:-/tmp}/xmtp-bridge-runtime-qa-schema.$$.txt"
 vector_result_file="${TMPDIR:-/tmp}/xmtp-bridge-runtime-qa-vectors.$$.jsonl"
 
+opt_in_vault_integration=''
+if [ "${RUNTIME_QA_INCLUDE_OPT_IN:-0}" = 1 ]; then
+  opt_in_vault_integration=1
+fi
+
 compose() {
-  docker compose -f "$compose_file" -p "$compose_project" "$@"
+  if [ -n "$opt_in_vault_integration" ]; then
+    docker compose \
+      -f "$compose_file" \
+      -p "$compose_project" \
+      --profile pg18 \
+      "$@"
+  else
+    docker compose -f "$compose_file" -p "$compose_project" "$@"
+  fi
 }
 
 cleanup() {
@@ -52,17 +65,34 @@ compose exec -T bridge sh -eu -c '
 '
 
 # RUNTIME_QA_INCLUDE_OPT_IN=1 additionally runs the VAULT_INTEGRATION_TESTS
-# surface (the A9 CAS delivery/routing integration tests). The default run
-# skips those tests, so a default green does not prove the A9 CAS layer —
-# that gap is how an always-red A9 surface went unnoticed until 2026-08-06.
-opt_in_vault_integration=''
-if [ "${RUNTIME_QA_INCLUDE_OPT_IN:-0}" = 1 ]; then
-  opt_in_vault_integration=1
-fi
+# surface (the A9 CAS delivery/routing integration tests) and the access-audit
+# catalog barrier against both supported PostgreSQL catalog families. The
+# default run skips those tests, so a default green does not prove either
+# opt-in surface.
 
 BRIDGE_TEST_DSN='postgres://bridge_runtime_qa:xmtp_runtime_qa@127.0.0.1:15432/bridge_runtime_qa?sslmode=disable' \
   VAULT_INTEGRATION_TESTS="$opt_in_vault_integration" \
   go test -buildvcs=false -mod=readonly -p 1 -count=1 ./...
+
+if [ -n "$opt_in_vault_integration" ]; then
+  for matrix_entry in \
+    'postgres13|postgres://bridge_runtime_qa:xmtp_runtime_qa@127.0.0.1:15432/bridge_runtime_qa?sslmode=disable' \
+    'postgres18|postgres://bridge_runtime_qa:xmtp_runtime_qa@127.0.0.1:15433/bridge_runtime_qa?sslmode=disable'
+  do
+    matrix_name=${matrix_entry%%|*}
+    matrix_dsn=${matrix_entry#*|}
+    printf 'access-audit barrier matrix: %s\n' "$matrix_name"
+    BRIDGE_TEST_DSN="$matrix_dsn" \
+      VAULT_INTEGRATION_TESTS=1 \
+      go test \
+        -buildvcs=false \
+        -mod=readonly \
+        -p 1 \
+        -count=1 \
+        ./pkg/vault \
+        -run '^TestAccessAuditBarrier'
+  done
+fi
 
 go run ./runtime-qa/cmd/gate6check \
   -cases runtime-qa/vectors/gate6.json \
