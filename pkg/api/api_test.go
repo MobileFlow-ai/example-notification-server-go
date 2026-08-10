@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/xmtp/example-notification-server-go/mocks"
+	"github.com/xmtp/example-notification-server-go/pkg/a10registration"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	proto "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1"
@@ -858,6 +859,66 @@ func TestDisableLegacyMutationAPIClosesConnectMethodsWithoutMountingHandler(
 		connect.NewRequest(&proto.SubscribeWithMetadataRequest{}),
 	)
 	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+func TestA10RegistrationHookRequiresClosedLegacyAPIAndExplicitHandler(t *testing.T) {
+	server := NewApiServer(
+		testutils.TestLogger(t),
+		options.ApiOptions{},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV4,
+	)
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	})
+	require.ErrorIs(t, server.EnableA10Registration(handler), ErrAPIUnavailable)
+	server.DisableLegacyMutationAPI()
+	require.ErrorIs(t, server.EnableA10Registration(nil), ErrAPIUnavailable)
+	require.NoError(t, server.EnableA10Registration(handler))
+	require.ErrorIs(t, server.EnableA10Registration(handler), ErrAPIUnavailable)
+}
+
+func TestA10RegistrationRouteIsAbsentUnlessHookIsExplicitlyInstalled(t *testing.T) {
+	newServer := func(t *testing.T, install bool) *ApiServer {
+		t.Helper()
+		server := NewApiServer(
+			testutils.TestLogger(t),
+			options.ApiOptions{},
+			mocks.NewInstallations(t),
+			mocks.NewSubscriptions(t),
+			interfaces.ListenerTypeV4,
+		)
+		server.DisableLegacyMutationAPI()
+		if install {
+			require.NoError(t, server.EnableA10Registration(http.HandlerFunc(
+				func(writer http.ResponseWriter, request *http.Request) {
+					if request.URL.Path != a10registration.Path {
+						writer.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					writer.WriteHeader(http.StatusNoContent)
+				},
+			)))
+		}
+		return server
+	}
+
+	absentServer := newServer(t, false)
+	absent := httptest.NewRecorder()
+	absentServer.buildHTTPHandler().ServeHTTP(
+		absent,
+		httptest.NewRequest(http.MethodPut, a10registration.Path, strings.NewReader("{}")),
+	)
+	require.Equal(t, http.StatusNotFound, absent.Code)
+
+	mountedServer := newServer(t, true)
+	mounted := httptest.NewRecorder()
+	mountedServer.buildHTTPHandler().ServeHTTP(
+		mounted,
+		httptest.NewRequest(http.MethodPut, a10registration.Path, strings.NewReader("{}")),
+	)
+	require.Equal(t, http.StatusNoContent, mounted.Code)
 }
 
 func (b *secureMountBackend) Refresh(

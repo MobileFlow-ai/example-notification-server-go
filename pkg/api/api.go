@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/xmtp/example-notification-server-go/pkg/a10registration"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	privacylog "github.com/xmtp/example-notification-server-go/pkg/logging"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
@@ -38,6 +39,7 @@ type ApiServer struct {
 	readyCheck                func() bool
 	xmtpReadyCheck            func() bool
 	secureRefresh             *registration.Handler
+	a10Registration           http.Handler
 	secureMode                bool
 	legacyMutationAPIDisabled bool
 	failureOnce               sync.Once
@@ -125,6 +127,18 @@ func (s *ApiServer) DisableLegacyMutationAPI() {
 	s.legacyMutationAPIDisabled = true
 }
 
+// EnableA10Registration exposes the reviewed public route hook only after the
+// legacy mutation API has been irreversibly closed. Main deliberately does not
+// call this until durable replay and encrypted-vault sink adapters exist.
+func (s *ApiServer) EnableA10Registration(handler http.Handler) error {
+	if s == nil || handler == nil || s.httpServer != nil ||
+		!s.legacyMutationAPIDisabled || s.a10Registration != nil {
+		return ErrAPIUnavailable
+	}
+	s.a10Registration = handler
+	return nil
+}
+
 func (s *ApiServer) Start() error {
 	if s.httpServer != nil {
 		return nil
@@ -132,26 +146,11 @@ func (s *ApiServer) Start() error {
 	if err := s.Prepare(); err != nil {
 		return err
 	}
-	mux := http.NewServeMux()
-	path, handler := notificationsv1connect.NewNotificationsHandler(s)
-	mux.Handle(path, handler)
-	if s.secureRefresh != nil {
-		mux.Handle(registration.RefreshPath, s.secureRefresh)
-		mux.HandleFunc(registration.PolicyPath, s.secureRefresh.ServePolicyHTTP)
-		mux.HandleFunc(registration.WelcomePath, s.secureRefresh.ServeWelcomeHTTP)
-	}
-	mux.HandleFunc("/readyz", s.handleReady)
-	mux.HandleFunc("/livez", s.handleLive)
-	mux.HandleFunc("/health/xmtp", s.handleXMTPHealth)
-
 	listener := s.listener
 	addr := listener.Addr().String()
 	s.httpServer = &http.Server{
-		Addr: addr,
-		Handler: privacySafeHTTPHandler(
-			s.logger,
-			h2c.NewHandler(mux, &http2.Server{}),
-		),
+		Addr:    addr,
+		Handler: s.buildHTTPHandler(),
 		// net/http's default error logger includes the remote address and a
 		// stack trace when a handler panics. The recovery boundary above owns
 		// handler failures; suppress the fallback path so a raw provider IP,
@@ -182,6 +181,27 @@ func (s *ApiServer) Start() error {
 		s.logger.Info("api server stopped")
 	}()
 	return nil
+}
+
+func (s *ApiServer) buildHTTPHandler() http.Handler {
+	mux := http.NewServeMux()
+	path, handler := notificationsv1connect.NewNotificationsHandler(s)
+	mux.Handle(path, handler)
+	if s.secureRefresh != nil {
+		mux.Handle(registration.RefreshPath, s.secureRefresh)
+		mux.HandleFunc(registration.PolicyPath, s.secureRefresh.ServePolicyHTTP)
+		mux.HandleFunc(registration.WelcomePath, s.secureRefresh.ServeWelcomeHTTP)
+	}
+	if s.a10Registration != nil {
+		mux.Handle(a10registration.Path, s.a10Registration)
+	}
+	mux.HandleFunc("/readyz", s.handleReady)
+	mux.HandleFunc("/livez", s.handleLive)
+	mux.HandleFunc("/health/xmtp", s.handleXMTPHealth)
+	return privacySafeHTTPHandler(
+		s.logger,
+		h2c.NewHandler(mux, &http2.Server{}),
+	)
 }
 
 func (s *ApiServer) signalFailure() {

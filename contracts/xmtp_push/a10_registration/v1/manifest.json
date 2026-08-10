@@ -1,0 +1,10 @@
+{
+  "contract": "hytch.xmtp-push.a10-registration.v1",
+  "status": "dormant-handler-no-durable-store",
+  "positive_fixture_sha256": "69d6f7e212fc0f8824a212a6ac384ab53cd6d427d20b0500ad1846e8e0cc84a5",
+  "negative_fixture_sha256": "3533c8d93737e00fea3790de92de008dc2cec5d09b8e80887991c35520dfaf43",
+  "negative_case_count": 19,
+  "a9_artifact_unchanged": true,
+  "runtime_default": "off",
+  "apns_hard_close": "retained"
+}

@@ -1,0 +1,24 @@
+{
+  "base_fixture": "positive.json",
+  "cases": [
+    {"id":"wrong_environment","mutation":"credential.environment=production; resign","expected_status":401,"expected_body":"unauthorized","guard":"runtime environment equality"},
+    {"id":"arbitrary_installation","mutation":"request.installation_id_base64url=32 zero bytes","expected_status":401,"expected_body":"unauthorized","guard":"request body digest and credential installation equality"},
+    {"id":"wrong_installation_binding","mutation":"request.installation_binding_id=16 zero bytes","expected_status":401,"expected_body":"unauthorized","guard":"actual installation binding equality"},
+    {"id":"wrong_owner_binding","mutation":"request.owner_binding=32 zero bytes","expected_status":401,"expected_body":"unauthorized","guard":"authenticated owner binding equality"},
+    {"id":"apns_token_hash_mismatch","mutation":"request.apns_token_base64url=32 zero bytes","expected_status":401,"expected_body":"unauthorized","guard":"APNS token SHA-256 equality"},
+    {"id":"wrong_apns_topic","mutation":"request.apns_topic=com.hytch.rewards","expected_status":401,"expected_body":"unauthorized","guard":"environment-specific APNS topic allowlist"},
+    {"id":"expired","mutation":"verification_time=fixture_time_unix+66","expected_status":401,"expected_body":"unauthorized","guard":"exp plus five-second skew"},
+    {"id":"replayed","mutation":"submit the exact positive token twice","expected_status":409,"expected_body":"replay","guard":"atomic replay consume"},
+    {"id":"tampered_body","mutation":"append one ASCII space to request_body_base64url bytes","expected_status":401,"expected_body":"unauthorized","guard":"exact request SHA-256"},
+    {"id":"wrong_method","mutation":"HTTP method=POST","expected_status":401,"expected_body":"unauthorized","guard":"method binding"},
+    {"id":"wrong_path","mutation":"path=/v1/xmtp-push/installations:delete","expected_status":401,"expected_body":"unauthorized","guard":"path binding"},
+    {"id":"wrong_audience","mutation":"credential.aud=hytch.xmtp-push-bridge.a9-control; resign","expected_status":401,"expected_body":"unauthorized","guard":"audience equality"},
+    {"id":"bad_signature","mutation":"flip the low bit of credential signature byte 0","expected_status":401,"expected_body":"unauthorized","guard":"Ed25519 verification"},
+    {"id":"unknown_key","mutation":"credential.header.kid=ed25519-sha256 plus 64 zeroes; resign with fixture key","expected_status":401,"expected_body":"unauthorized","guard":"root-verified A10_REGISTRATION key lookup"},
+    {"id":"malformed_jti","mutation":"credential.jti=A10; resign","expected_status":401,"expected_body":"unauthorized","guard":"canonical UUID"},
+    {"id":"lifetime_over_60","mutation":"credential.exp=fixture_time_unix+61; resign","expected_status":401,"expected_body":"unauthorized","guard":"60-second maximum lifetime"},
+    {"id":"future_nbf","mutation":"credential.nbf=fixture_time_unix+1; resign","expected_status":401,"expected_body":"unauthorized","guard":"nbf no later than iat"},
+    {"id":"key_wrong_use","mutation":"keyset.keys[0].use=SERVICE_AUTH; root-resign","expected_status":503,"expected_body":"unavailable","guard":"distinct A10_REGISTRATION key use"},
+    {"id":"replay_store_unavailable","mutation":"replay store returns unavailable before commit","expected_status":503,"expected_body":"unavailable","guard":"durable replay availability"}
+  ]
+}
