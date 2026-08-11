@@ -205,6 +205,20 @@ func (manager *KeysetManager) CurrentA10Keyset(ctx context.Context) ([]byte, err
 	return append([]byte(nil), accepted.CanonicalSignedObject...), nil
 }
 
+// NextRefresh returns the hard serving deadline of the exact in-memory
+// keyset. Callers should refresh before this time and fail readiness at it.
+func (manager *KeysetManager) NextRefresh() (time.Time, bool) {
+	if manager == nil {
+		return time.Time{}, false
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	if manager.snapshot == nil {
+		return time.Time{}, false
+	}
+	return manager.snapshot.accepted.ExpiresAt, true
+}
+
 func (manager *KeysetManager) validateCandidate(raw []byte, now time.Time) (AcceptedKeyset, error) {
 	object, err := validateKeyset(raw, manager.rootPin, manager.environment, now)
 	if err != nil {

@@ -7,6 +7,8 @@ package queries
 import (
 	"database/sql"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type DeviceDeliveryMechanism struct {
@@ -16,6 +18,265 @@ type DeviceDeliveryMechanism struct {
 	UpdatedAt      time.Time
 	Kind           string
 	Token          string
+}
+
+type HytchPushVaultA10AcceptedKeyset struct {
+	Environment      int16
+	KeysetSequence   int64
+	SignedKeysetHash []byte
+	SignedKeysetJcs  []byte
+	IssuedAt         time.Time
+	ExpiresAt        time.Time
+	AcceptedAt       time.Time
+}
+
+type HytchPushVaultA10KeysetState struct {
+	Environment       int16
+	KeysetSequence    int64
+	SignedKeysetHash  []byte
+	State             int16
+	UncertaintyReason int16
+	ExpiresAt         time.Time
+	RefreshedAt       time.Time
+}
+
+type HytchPushVaultA10RegistrationBinding struct {
+	Environment           int16
+	InstallationBindingID []byte
+	InstallationIdentity  []byte
+	OwnerBinding          []byte
+	CreatedAt             time.Time
+}
+
+type HytchPushVaultA10RegistrationReplay struct {
+	Environment  int16
+	Jti          uuid.UUID
+	JwtExpiresAt time.Time
+	DeleteAfter  time.Time
+	ConsumedAt   time.Time
+}
+
+type HytchPushVaultA9AcceptedKeyset struct {
+	Environment      int16
+	KeysetSequence   int64
+	SignedKeysetHash []byte
+	SignedKeysetJcs  []byte
+	RootSigningKeyID []byte
+	IssuedAt         time.Time
+	ExpiresAt        time.Time
+	AcceptedAt       time.Time
+}
+
+type HytchPushVaultA9Assertion struct {
+	Environment             int16
+	AssertionHash           []byte
+	InstallationBindingID   []byte
+	SequencerEpoch          []byte
+	AssertionStreamSequence int64
+	BindingID               []byte
+	BindingVersion          int64
+	LeaseID                 []byte
+	TupleCommitment         []byte
+	TupleCommitmentKeyID    []byte
+	TupleCommitmentPurpose  sql.NullInt16
+	RosterCommitment        []byte
+	RosterCommitmentKeyID   []byte
+	RosterCommitmentPurpose sql.NullInt16
+	TopicBinding            []byte
+	TopicKeyEpoch           int64
+	TopicCommitmentKeyID    []byte
+	TopicCommitmentPurpose  sql.NullInt16
+	ConversationGeneration  int32
+	RosterVersion           int32
+	IssuedAt                time.Time
+	ExpiresAt               time.Time
+	SigningKeyID            []byte
+	SigningKeyUse           sql.NullInt16
+	KeysetSequence          int64
+	KeysetHash              []byte
+	ControlAction           sql.NullInt16
+	ControlReasonCode       sql.NullInt16
+	AcceptedAt              time.Time
+}
+
+type HytchPushVaultA9Binding struct {
+	Environment                   int16
+	InstallationBindingID         []byte
+	BindingID                     []byte
+	SequencerEpoch                []byte
+	BindingVersion                int64
+	State                         int16
+	ActiveAssertionHash           []byte
+	ActiveAssertionStreamSequence sql.NullInt64
+	ActiveTopicKeyEpoch           sql.NullInt64
+	ActiveTopicBinding            []byte
+	ActiveKeysetSequence          sql.NullInt64
+	ActiveKeysetHash              []byte
+	UpdatedAt                     time.Time
+}
+
+type HytchPushVaultA9BindingTombstone struct {
+	Environment           int16
+	InstallationBindingID []byte
+	BindingID             []byte
+	BindingVersion        int64
+	AssertionHash         []byte
+	SequencerEpoch        []byte
+	ControlStreamSequence int64
+	ControlAction         sql.NullInt16
+	ReasonCode            int16
+	RevokedAt             time.Time
+}
+
+type HytchPushVaultA9CommitmentKeyDescriptor struct {
+	Environment    int16
+	KeysetSequence int64
+	Purpose        int16
+	KeyID          []byte
+	TopicKeyEpoch  sql.NullInt64
+	NotBefore      time.Time
+	NotAfter       time.Time
+}
+
+type HytchPushVaultA9ControlEvent struct {
+	Environment              int16
+	InstallationBindingID    []byte
+	SequencerEpoch           []byte
+	StreamSequence           int64
+	ExpectedPreviousSequence int64
+	BindingID                []byte
+	BindingVersion           int64
+	ExpectedBindingVersion   int64
+	Action                   int16
+	AssertionHash            []byte
+	ReasonCode               int16
+	IdempotencyKey           uuid.UUID
+	IdempotencyOperation     int16
+	SignedEventHash          []byte
+	StreamIsContiguous       bool
+	IssuedAt                 time.Time
+	ExpiresAt                time.Time
+	SigningKeyID             []byte
+	SigningKeyUse            sql.NullInt16
+	KeysetSequence           int64
+	KeysetHash               []byte
+	AcceptedAt               time.Time
+}
+
+type HytchPushVaultA9IdempotencyReceipt struct {
+	Environment            int16
+	IdempotencyKey         uuid.UUID
+	OperationKind          int16
+	InstallationBindingID  []byte
+	SequencerEpoch         []byte
+	SignedRequestHash      []byte
+	ResultOutcome          int16
+	ResultState            int16
+	SubscriptionGeneration int64
+	AcceptedStreamSequence int64
+	CreatedAt              time.Time
+}
+
+type HytchPushVaultA9InstallationAuthority struct {
+	Environment                int16
+	InstallationBindingID      []byte
+	SequencerEpoch             []byte
+	ContiguousStreamSequence   int64
+	SubscriptionGeneration     int64
+	State                      int16
+	UncertaintyReason          int16
+	WatermarkSequence          sql.NullInt64
+	WatermarkSignedHash        []byte
+	WatermarkCommittedThrough  sql.NullInt64
+	WatermarkStatus            sql.NullInt16
+	WatermarkUncertaintyReason sql.NullInt16
+	WatermarkIssuedAt          sql.NullTime
+	WatermarkExpiresAt         sql.NullTime
+	WatermarkSigningKeyID      []byte
+	WatermarkSigningKeyUse     sql.NullInt16
+	WatermarkKeysetSequence    sql.NullInt64
+	WatermarkKeysetHash        []byte
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+}
+
+type HytchPushVaultA9InstallationGate6Binding struct {
+	Environment           int16
+	InstallationBindingID []byte
+	InstallationIdentity  []byte
+	CreatedAt             time.Time
+}
+
+type HytchPushVaultA9KeysetState struct {
+	Environment       int16
+	KeysetSequence    int64
+	SignedKeysetHash  []byte
+	State             int16
+	UncertaintyReason int16
+	ExpiresAt         sql.NullTime
+	RefreshedAt       time.Time
+}
+
+type HytchPushVaultA9OnlineKeyDescriptor struct {
+	Environment    int16
+	KeysetSequence int64
+	KeyUse         int16
+	KeyState       int16
+	KeyID          []byte
+	PublicKey      []byte
+	NotBefore      time.Time
+	NotAfter       time.Time
+}
+
+type HytchPushVaultA9ServiceJtiReceipt struct {
+	Environment  int16
+	Jti          uuid.UUID
+	JwtExpiresAt time.Time
+	DeleteAfter  time.Time
+	ConsumedAt   time.Time
+}
+
+type HytchPushVaultA9SubscriptionRoute struct {
+	LeaseID                   []byte
+	Environment               int16
+	InstallationBindingID     []byte
+	InstallationIdentity      []byte
+	SequencerEpoch            []byte
+	SubscriptionGeneration    int64
+	ReplacementIdempotencyKey uuid.UUID
+	ReplacementOperation      sql.NullInt16
+	ReplacementOutcome        sql.NullInt16
+	ReplacementState          sql.NullInt16
+	BindingID                 []byte
+	BindingVersion            int64
+	AssertionHash             []byte
+	AssertionStreamSequence   int64
+	TopicKeyEpoch             int64
+	TopicBinding              []byte
+	RouteKeyEpoch             int64
+	KeysetSequence            int64
+	KeysetHash                []byte
+	WatermarkSequence         int64
+	CreatedAt                 time.Time
+	RefreshedAt               time.Time
+}
+
+type HytchPushVaultA9Watermark struct {
+	Environment                    int16
+	InstallationBindingID          []byte
+	SequencerEpoch                 []byte
+	WatermarkSequence              int64
+	SignedWatermarkHash            []byte
+	CommittedThroughStreamSequence int64
+	Status                         int16
+	UncertaintyReason              int16
+	IssuedAt                       time.Time
+	ExpiresAt                      time.Time
+	SigningKeyID                   []byte
+	SigningKeyUse                  sql.NullInt16
+	KeysetSequence                 int64
+	KeysetHash                     []byte
+	AcceptedAt                     time.Time
 }
 
 type HytchPushVaultAccessAudit struct {
@@ -68,19 +329,32 @@ type HytchPushVaultDeliveryDedupe struct {
 }
 
 type HytchPushVaultDeliveryJob struct {
-	JobID              []byte
-	LeaseID            []byte
-	InstallationLookup []byte
-	EncryptedJob       []byte
-	Environment        int16
-	State              int16
-	Attempts           int16
-	RetryExponent      int16
-	AvailableAt        time.Time
-	ExpiresAt          time.Time
-	CreatedAt          time.Time
-	TrafficClass       sql.NullInt16
-	FinalReason        sql.NullInt16
+	JobID                     []byte
+	LeaseID                   []byte
+	InstallationLookup        []byte
+	EncryptedJob              []byte
+	Environment               int16
+	State                     int16
+	Attempts                  int16
+	RetryExponent             int16
+	AvailableAt               time.Time
+	ExpiresAt                 time.Time
+	CreatedAt                 time.Time
+	TrafficClass              sql.NullInt16
+	FinalReason               sql.NullInt16
+	A9InstallationBindingID   []byte
+	A9SequencerEpoch          []byte
+	A9SubscriptionGeneration  sql.NullInt64
+	A9BindingID               []byte
+	A9BindingVersion          sql.NullInt64
+	A9AssertionHash           []byte
+	A9AssertionStreamSequence sql.NullInt64
+	A9TopicKeyEpoch           sql.NullInt64
+	A9TopicBinding            []byte
+	A9RouteKeyEpoch           sql.NullInt64
+	A9KeysetSequence          sql.NullInt64
+	A9KeysetHash              []byte
+	A9WatermarkSequence       sql.NullInt64
 }
 
 type HytchPushVaultInstallationState struct {
@@ -168,6 +442,7 @@ type HytchPushVaultSubscriptionLease struct {
 	ExpiresAt                  time.Time
 	ControlExpiresAt           time.Time
 	RevokedAt                  sql.NullTime
+	InstallationIdentity       []byte
 }
 
 type HytchPushVaultVaultKeyBinding struct {

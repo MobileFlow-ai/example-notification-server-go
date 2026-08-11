@@ -82,6 +82,10 @@ func TestKeysetManagerRefreshesRootPinnedExactEndpointAndJoinsStore(t *testing.T
 		t.Fatal("accepted keyset did not join exact high-water state")
 	}
 	store.mu.Unlock()
+	refreshAt, ok := manager.NextRefresh()
+	if !ok || !refreshAt.Equal(store.state.ExpiresAt) {
+		t.Fatal("manager did not expose the exact keyset refresh deadline")
+	}
 }
 
 func TestKeysetManagerFailsClosedOnStoreUncertaintyAndMismatch(t *testing.T) {

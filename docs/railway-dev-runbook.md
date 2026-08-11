@@ -4,7 +4,7 @@
 
 The dedicated local runtime-QA harness is now confirmed at its narrow scope:
 the bridge image built and ran on loopback ports 15432/18080, migration
-`12|false`, health probes, the serial Go suite, and the payload-free Gate-6
+`13|false`, health probes, the serial Go suite, and the payload-free Gate-6
 policy verifier passed. This corrects the prior blanket statement that all
 local runtime QA was unconfirmed.
 
@@ -365,6 +365,26 @@ closed and its TOPIC material is released. Incomplete private-listener or
 trust-manager shutdown is a runtime failure. None of this dormant wiring
 authorizes migration activation, deployment, APNS, Welcome, or E2E claims;
 local QA remains **UNCONFIRMED**.
+
+## Dormant A10 authenticated registration source
+
+Migration 13 and the dormant A10 adapters provide a separate root-pinned
+keyset high-water mark, one-use registration replay receipts, an append-only
+installation-owner binding, and an encrypted-vault token sink. The sink can
+rotate only the APNS token of an existing active installation whose raw
+installation ID resolves to the exact A9-to-Gate-6 mapping. It cannot create
+authority, create a route, extend a lease, repair uncertainty, or change a
+subscription. A token change invalidates queued delivery-job safety before the
+new ciphertext is committed.
+
+The A10 public route is still not mounted by `cmd/server/main.go`, and the APNS
+startup hard-close remains in place. The checked-in Railway configuration
+keeps `BRIDGE_A10_REGISTRATION_ENABLED=false` and `APNS_ENABLED=false`. The
+dormant assembly code is not an activation path: a later separately authorized
+and exact-head-reviewed change must define and test the complete startup
+prerequisite set before it may mount the route or remove the APNS hard-close.
+No migration, Railway variable, root ceremony, APNS credential, deployment,
+or provider call is authorized by this source.
 
 ## Private incident-access contract
 
