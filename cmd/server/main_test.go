@@ -37,9 +37,79 @@ func TestWelcomeRuntimeConfigurationIsHardClosed(t *testing.T) {
 	require.False(t, welcomeRuntimeConfigurationValid(true))
 }
 
-func TestAPNSRuntimeConfigurationIsHardClosed(t *testing.T) {
-	require.True(t, apnsRuntimeConfigurationValid(false))
-	require.False(t, apnsRuntimeConfigurationValid(true))
+func TestAPNSRuntimeConfigurationRequiresExactDevA9A10Runtime(t *testing.T) {
+	require.True(t, apnsRuntimeConfigurationValid(options.Options{}))
+
+	valid := validA10RuntimeOptions(t)
+	require.True(t, apnsRuntimeConfigurationValid(valid))
+
+	for name, mutate := range map[string]func(*options.Options){
+		"A10 off":                func(config *options.Options) { config.A10.Enabled = false },
+		"A9 off":                 func(config *options.Options) { config.A9.Enabled = false },
+		"vault off":              func(config *options.Options) { config.Vault.Enabled = false },
+		"API off":                func(config *options.Options) { config.Api.Enabled = false },
+		"listener off":           func(config *options.Options) { config.Xmtp.ListenerEnabled = false },
+		"v3 listener":            func(config *options.Options) { config.Xmtp.ListenerType = "v3" },
+		"production environment": func(config *options.Options) { config.Vault.Environment = "production" },
+		"secure wrapper off": func(config *options.Options) {
+			config.Apns.SecureWrapperRequired = false
+		},
+		"empty secure environment": func(config *options.Options) {
+			config.Apns.SecureEnvironment = ""
+		},
+		"production secure environment": func(config *options.Options) {
+			config.Apns.SecureEnvironment = "production"
+		},
+		"production topic":    func(config *options.Options) { config.Apns.Topic = "com.hytch.rewards" },
+		"production provider": func(config *options.Options) { config.Apns.Mode = "production" },
+		"raw credential":      func(config *options.Options) { config.Apns.P8Certificate = "secret" },
+		"missing base64 reference": func(config *options.Options) {
+			config.Apns.P8CertificateBase64 = ""
+		},
+		"file credential": func(config *options.Options) {
+			config.Apns.P8CertificateFilePath = "/secrets/key.p8"
+		},
+		"missing key id":  func(config *options.Options) { config.Apns.KeyId = "" },
+		"missing team id": func(config *options.Options) { config.Apns.TeamId = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			mutate(&candidate)
+			require.False(t, apnsRuntimeConfigurationValid(candidate))
+		})
+	}
+}
+
+func TestA10RuntimeConfigurationRejectsDisabledMaterialAndDowngrades(t *testing.T) {
+	require.True(t, a10RuntimeConfigurationValid(options.Options{}))
+	disabledWithMaterial := options.Options{}
+	disabledWithMaterial.A10.PinnedRootKeyID = "latent-key"
+	require.False(t, a10RuntimeConfigurationValid(disabledWithMaterial))
+
+	valid := validA10RuntimeOptions(t)
+	require.True(t, a10RuntimeConfigurationValid(valid))
+	for name, mutate := range map[string]func(*options.Options){
+		"APNS off":                func(config *options.Options) { config.Apns.Enabled = false },
+		"A9 off":                  func(config *options.Options) { config.A9.Enabled = false },
+		"vault off":               func(config *options.Options) { config.Vault.Enabled = false },
+		"API off":                 func(config *options.Options) { config.Api.Enabled = false },
+		"listener off":            func(config *options.Options) { config.Xmtp.ListenerEnabled = false },
+		"v3 listener":             func(config *options.Options) { config.Xmtp.ListenerType = "v3" },
+		"production environment":  func(config *options.Options) { config.Vault.Environment = "production" },
+		"missing origin":          func(config *options.Options) { config.A10.KeysetOrigin = "" },
+		"missing root public key": func(config *options.Options) { config.A10.PinnedRootPublicKeyBase64URL = "" },
+		"missing root key id":     func(config *options.Options) { config.A10.PinnedRootKeyID = "" },
+		"zero timeout":            func(config *options.Options) { config.A10.KeysetRequestTimeoutSeconds = 0 },
+		"oversized timeout": func(config *options.Options) {
+			config.A10.KeysetRequestTimeoutSeconds = maxA9KeysetRequestTimeoutSeconds + 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			mutate(&candidate)
+			require.False(t, a10RuntimeConfigurationValid(candidate))
+		})
+	}
 }
 
 func TestA9RuntimeConfigurationRejectsDisabledMaterialAndDowngrades(
