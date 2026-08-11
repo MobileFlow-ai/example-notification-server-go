@@ -6,7 +6,7 @@ type ApiOptions struct {
 }
 
 type ApnsOptions struct {
-	Enabled                bool   `long:"apns-enabled" env:"APNS_ENABLED" description:"Compatibility flag; true is rejected until the reviewed A9 and Gate 8 activation is implemented"`
+	Enabled                bool   `long:"apns-enabled" env:"APNS_ENABLED" description:"Enable APNS only for the reviewed dev A9/A10 secure-vault runtime"`
 	SecureWrapperRequired  bool   `long:"apns-secure-wrapper-required" env:"APNS_SECURE_WRAPPER_REQUIRED" description:"Reject APNS requests that do not carry a Gate 8 secure route"`
 	SecureEnvironment      string `long:"apns-secure-environment" env:"APNS_SECURE_ENVIRONMENT" choice:"dev" choice:"production" default:"dev" description:"Logical environment bound into Gate 8 APNS wrappers"`
 	RatePerSecond          int    `long:"apns-rate-per-second" env:"APNS_RATE_PER_SECOND" default:"50" description:"Provisional process-wide APNS token rate per second"`
