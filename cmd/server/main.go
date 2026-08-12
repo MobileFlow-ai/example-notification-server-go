@@ -433,17 +433,13 @@ func runServer() {
 
 	if opts.Api.Enabled {
 		apiServer = api.NewApiServer(logger, opts.Api, installationsService, subscriptionsService, interfaces.ListenerType(opts.Xmtp.ListenerType))
-		if opts.A9.Enabled {
-			apiServer.DisableLegacyMutationAPI()
-		} else if secureRegistration != nil {
-			apiServer.EnableSecureRegistration(secureRegistration)
-		}
-		if a10RegistrationRuntime != nil {
-			if err = apiServer.EnableA10Registration(
-				a10RegistrationRuntime.handler,
-			); err != nil {
-				logger.Fatal("failed to enable A10 registration")
-			}
+		if err = configureRuntimeRegistrationAPI(
+			apiServer,
+			opts.A9.Enabled,
+			secureRegistration,
+			a10RegistrationRuntime,
+		); err != nil {
+			logger.Fatal("failed to enable A10 registration")
 		}
 		if notifListener != nil {
 			apiServer.SetXMTPReadyCheck(notifListener.Ready)
@@ -711,6 +707,28 @@ func runServer() {
 	if runtimeFailed {
 		panic("runtime control failed")
 	}
+}
+
+func configureRuntimeRegistrationAPI(
+	apiServer *api.ApiServer,
+	a9Enabled bool,
+	secureRegistration *registration.Handler,
+	a10RegistrationRuntime *a10Runtime,
+) error {
+	if apiServer == nil {
+		return api.ErrAPIUnavailable
+	}
+	if a9Enabled {
+		apiServer.DisableLegacyMutationAPI()
+	} else if secureRegistration != nil {
+		apiServer.EnableSecureRegistration(secureRegistration)
+	}
+	if a10RegistrationRuntime == nil {
+		return nil
+	}
+	return apiServer.EnableA10Registration(
+		a10RegistrationRuntime.handler,
+	)
 }
 
 func welcomeRuntimeConfigurationValid(enabled bool) bool {

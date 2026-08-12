@@ -61,8 +61,25 @@ cmp runtime-qa/expected/schema_migrations.txt "$schema_result_file"
 compose exec -T bridge sh -eu -c '
   test "$APNS_ENABLED" = false
   test "$BRIDGE_A9_ENABLED" = false
+  test "$BRIDGE_A10_REGISTRATION_ENABLED" = false
   test "$BRIDGE_WELCOME_ENABLED" = false
 '
+
+# The long-lived container remains dormant so runtime QA can never contact
+# APNS, XMTP, or an authority service. This explicit probe separately turns on
+# the complete A9/A10/APNS activation predicates, crosses the production A10
+# initializer with a loopback TLS keyset peer, mounts the real API route, and
+# proves encrypted persistence plus replay durability against the QA database.
+runtime_qa_dsn='postgres://bridge_runtime_qa:xmtp_runtime_qa@127.0.0.1:15432/bridge_runtime_qa?sslmode=disable'
+A10_RUNTIME_QA=1 \
+  BRIDGE_TEST_DSN="$runtime_qa_dsn" \
+  go test \
+    -buildvcs=false \
+    -mod=readonly \
+    -p 1 \
+    -count=1 \
+    ./cmd/server \
+    -run '^TestActivatedA10ServerAssemblyRuntimeQA$'
 
 # RUNTIME_QA_INCLUDE_OPT_IN=1 additionally runs the VAULT_INTEGRATION_TESTS
 # surface (the A9 CAS delivery/routing integration tests) and the access-audit
@@ -70,7 +87,7 @@ compose exec -T bridge sh -eu -c '
 # default run skips those tests, so a default green does not prove either
 # opt-in surface.
 
-BRIDGE_TEST_DSN='postgres://bridge_runtime_qa:xmtp_runtime_qa@127.0.0.1:15432/bridge_runtime_qa?sslmode=disable' \
+BRIDGE_TEST_DSN="$runtime_qa_dsn" \
   VAULT_INTEGRATION_TESTS="$opt_in_vault_integration" \
   go test -buildvcs=false -mod=readonly -p 1 -count=1 ./...
 
@@ -101,7 +118,7 @@ cmp runtime-qa/expected/gate6.jsonl "$vector_result_file"
 
 compose ps
 if [ -n "$opt_in_vault_integration" ]; then
-  printf '%s\n' 'runtime QA passed (with opt-in vault integration): postgres=15432 bridge=18080 welcome=false'
+  printf '%s\n' 'runtime QA passed (with opt-in vault integration): postgres=15432 bridge=18080 a10-assembly=activated-local welcome=false'
 else
-  printf '%s\n' 'runtime QA passed: postgres=15432 bridge=18080 welcome=false'
+  printf '%s\n' 'runtime QA passed: postgres=15432 bridge=18080 a10-assembly=activated-local welcome=false'
 fi

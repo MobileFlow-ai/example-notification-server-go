@@ -49,6 +49,7 @@ services:
     environment:
       APNS_ENABLED: "false"
       BRIDGE_A9_ENABLED: "false"
+      BRIDGE_A10_REGISTRATION_ENABLED: "false"
       BRIDGE_WELCOME_ENABLED: "false"
       DB_CONNECTION_STRING: >-
         postgres://bridge_runtime_qa:xmtp_runtime_qa@db:5432/bridge_runtime_qa?sslmode=disable
