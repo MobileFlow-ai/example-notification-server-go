@@ -1,0 +1,41 @@
+{
+  "credential": "eyJhbGciOiJFZERTQSIsImtpZCI6ImVkMjU1MTktc2hhMjU2OmI4YTJiYjYzZmMxMjdjNDNlY2ExNDQyYjVkNmNhMjBkYzJhNTIzNTAzZThhMzIyNjc2MDVjYzBlNzljZWY1NTIiLCJ0eXAiOiJKV1QifQ.eyJhcG5zX3Rva2VuX3NoYTI1NiI6ImYzZTdhM2IzMDE3OWU3MTllNmY5NWVhZTAxZmMyNWI0ZGZlYzY0Y2Y0OWU5ZWQ1ZWY3Yjk4ZGFkYjA2ZmZhYTIiLCJhcG5zX3RvcGljIjoiY29tLm1vYmlsZWZsb3cuaHl0Y2hkZXYiLCJhdWQiOiJoeXRjaC54bXRwLXB1c2gtYnJpZGdlLnJlZ2lzdHJhdGlvbi52MSIsImVudmlyb25tZW50IjoiZGV2IiwiZXhwIjoxNzg2MzAwMjYwLCJpYXQiOjE3ODYzMDAyMDAsImluc3RhbGxhdGlvbl9iaW5kaW5nX2lkIjoiUmZtdWdpMWdqNkYzNV9lMmNodlRtdyIsImluc3RhbGxhdGlvbl9pZF9iYXNlNjR1cmwiOiJTRlJhTk8xVGVWUENNZFVRTlhxTGhmZ3p0OW55SlRCV3NMYS13UnhVYmtnIiwiaXNzIjoiaHl0Y2gtbW9kZXJuLWFwaSIsImp0aSI6ImExMGExMGExLTA4MTAtNGExMC04YTEwLWExMGExMGExMGExMCIsIm1ldGhvZCI6IlBVVCIsIm5iZiI6MTc4NjMwMDE5OSwib3duZXJfYmluZGluZyI6IkJFLXJENXg3cVJpbUN2NXVMS1QtZl9NelRxRWxxYzRPV2RMN0hFMm1mUW8iLCJwYXRoIjoiL3YxL3htdHAtcHVzaC9pbnN0YWxsYXRpb25zOnJlZ2lzdGVyIiwicmVxdWVzdF9zaGEyNTYiOiJiODY5NDFhOTk1YTBiMzUwYTBjZmNmMzNkNmM5M2UzNDk4YTcyMjdhZjg4ZGRmMjc1ZGM5ZjE2OWQ0YjQwMjJhIiwic3ViIjoieG10cC1wdXNoLXJlZ2lzdHJhdGlvbiJ9.T51BmXRjFkhiwADQY-QbmYeP6oaRkYF0dqWVDZF-QKn2RiwJqXoxqqlO7yeBv6N9t0dXeolHNGYcM7DAiu1fAA",
+  "expected_body": "",
+  "expected_status": 204,
+  "fixture_time_unix": 1786300200,
+  "keyset": {
+    "environment": "dev",
+    "expires_at": "2026-08-09T19:00:00.000Z",
+    "issued_at": "2026-08-09T18:00:00.000Z",
+    "keys": [
+      {
+        "key_id": "ed25519-sha256:b8a2bb63fc127c43eca1442b5d6ca20dc2a523503e8a32267605cc0e79cef552",
+        "not_after": "2026-08-16T18:00:00.000Z",
+        "not_before": "2026-08-08T18:00:00.000Z",
+        "public_key_base64url": "5zlzylicM3AEm5HmoPj-dcXuhYIBaTsADrCXU72Fye8",
+        "state": "SIGN",
+        "use": "A10_REGISTRATION"
+      }
+    ],
+    "keyset_sequence": 1,
+    "protocol": "hytch.xmtp-push.registration-keyset",
+    "root_signature_algorithm": "Ed25519",
+    "root_signature_base64url": "cg-iE_sk2xVO8tUXc-wDFhvAK0AgwDDZZQnJdmrljE-8hb9MXBipJzo7GbNu-JGPjWSbUYYVLZJpXCEeG6qkDg",
+    "root_signing_key_id": "ed25519-sha256:221217005be95d6e3ea9ff337177708d66014a95816a3b127ed0a92f50c5c803",
+    "schema_version": 1
+  },
+  "request": {
+    "apns_token_base64url": "W1wxD6Vhm9bayLhh55c8ZLC6-V7ARnv-GOdU8E2H9cA",
+    "apns_topic": "com.mobileflow.hytchdev",
+    "environment": "dev",
+    "installation_binding_id": "Rfmugi1gj6F35_e2chvTmw",
+    "installation_id_base64url": "SFRaNO1TeVPCMdUQNXqLhfgzt9nyJTBWsLa-wRxUbkg",
+    "owner_binding": "BE-rD5x7qRimCv5uLKT-f_MzTqElqc4OWdL7HE2mfQo",
+    "payload_schema": "xmtp.encrypted.v4",
+    "protocol": "hytch.xmtp-push.registration-request",
+    "schema_version": 1
+  },
+  "request_body_base64url": "eyJhcG5zX3Rva2VuX2Jhc2U2NHVybCI6Ilcxd3hENlZobTliYXlMaGg1NWM4WkxDNi1WN0FSbnYtR09kVThFMkg5Y0EiLCJhcG5zX3RvcGljIjoiY29tLm1vYmlsZWZsb3cuaHl0Y2hkZXYiLCJlbnZpcm9ubWVudCI6ImRldiIsImluc3RhbGxhdGlvbl9iaW5kaW5nX2lkIjoiUmZtdWdpMWdqNkYzNV9lMmNodlRtdyIsImluc3RhbGxhdGlvbl9pZF9iYXNlNjR1cmwiOiJTRlJhTk8xVGVWUENNZFVRTlhxTGhmZ3p0OW55SlRCV3NMYS13UnhVYmtnIiwib3duZXJfYmluZGluZyI6IkJFLXJENXg3cVJpbUN2NXVMS1QtZl9NelRxRWxxYzRPV2RMN0hFMm1mUW8iLCJwYXlsb2FkX3NjaGVtYSI6InhtdHAuZW5jcnlwdGVkLnY0IiwicHJvdG9jb2wiOiJoeXRjaC54bXRwLXB1c2gucmVnaXN0cmF0aW9uLXJlcXVlc3QiLCJzY2hlbWFfdmVyc2lvbiI6MX0",
+  "root_key_id": "ed25519-sha256:221217005be95d6e3ea9ff337177708d66014a95816a3b127ed0a92f50c5c803",
+  "root_public_key_base64url": "_UDuu5qIVI0N9FzLMzTNO4MseMVZHhlQvruXSkdu2S4"
+}

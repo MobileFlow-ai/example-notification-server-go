@@ -80,6 +80,22 @@ type A9Options struct {
 	MaxHeaderBytes               int    `long:"a9-max-header-bytes" env:"BRIDGE_A9_MAX_HEADER_BYTES" default:"16384" description:"A9 TLS listener maximum request-header bytes"`
 }
 
+type A10Options struct {
+	Enabled                      bool   `long:"a10-registration-enabled" env:"BRIDGE_A10_REGISTRATION_ENABLED" description:"Enable authenticated A10 installation registration only when every secure runtime prerequisite is present"`
+	KeysetOrigin                 string `long:"a10-keyset-origin" env:"BRIDGE_A10_KEYSET_ORIGIN" description:"Exact HTTPS modern-api origin used only for the separately root-pinned A10 registration keyset"`
+	PinnedRootPublicKeyBase64URL string `long:"a10-pinned-root-public-key" env:"BRIDGE_A10_PINNED_ROOT_PUBLIC_KEY" description:"Out-of-band canonical Base64url Ed25519 A10 root public key"`
+	PinnedRootKeyID              string `long:"a10-pinned-root-key-id" env:"BRIDGE_A10_PINNED_ROOT_KEY_ID" description:"Out-of-band A10 root key ID derived from the pinned public key"`
+	KeysetRequestTimeoutSeconds  int    `long:"a10-keyset-request-timeout-seconds" env:"BRIDGE_A10_KEYSET_REQUEST_TIMEOUT_SECONDS" default:"10" description:"A10 keyset discovery timeout, from 1 through 30 seconds"`
+}
+
+// HasTrustMaterial excludes the bounded nonzero timeout because it has a
+// default. Every other A10 value is dormant security material when disabled.
+func (options A10Options) HasTrustMaterial() bool {
+	return options.KeysetOrigin != "" ||
+		options.PinnedRootPublicKeyBase64URL != "" ||
+		options.PinnedRootKeyID != ""
+}
+
 // HasTrustMaterial reports only security-sensitive A9 fields. The bounded
 // timeout has a nonzero default and therefore is not configuration material.
 func (options A9Options) HasTrustMaterial() bool {
@@ -112,6 +128,7 @@ type Options struct {
 	HttpDelivery HttpDeliveryOptions   `group:"HTTP Delivery Options"`
 	Vault        VaultOptions          `group:"Hytch Secure Vault Options"`
 	A9           A9Options             `group:"Hytch A9 Authority Options"`
+	A10          A10Options            `group:"Hytch A10 Registration Options"`
 	Incident     IncidentAccessOptions `group:"Incident Access Options"`
 
 	DbConnectionString          string `short:"d" long:"db-connection-string" env:"DB_CONNECTION_STRING" description:"Address to database"`

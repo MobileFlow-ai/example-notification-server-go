@@ -131,3 +131,36 @@ func TestA9InlineTopicSecretRemainsDetectableAsRejectedMaterial(
 	require.Equal(t, "secret", parsed.A9.TopicCommitmentKeysJSON)
 	require.True(t, parsed.A9.HasTrustMaterial())
 }
+
+func TestA10OptionsUseSeparateRootPinnedTrustMaterial(t *testing.T) {
+	var parsed Options
+	_, err := flags.ParseArgs(
+		&parsed,
+		[]string{
+			"--a10-registration-enabled",
+			"--a10-keyset-origin=https://modern-api.internal",
+			"--a10-pinned-root-public-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			"--a10-pinned-root-key-id=ed25519-sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			"--a10-keyset-request-timeout-seconds=17",
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, parsed.A10.Enabled)
+	require.True(t, parsed.A10.HasTrustMaterial())
+	require.Equal(t, "https://modern-api.internal", parsed.A10.KeysetOrigin)
+	require.Equal(t, 17, parsed.A10.KeysetRequestTimeoutSeconds)
+	require.Empty(t, parsed.A9.KeysetOrigin)
+	require.Empty(t, parsed.A9.PinnedRootKeyID)
+}
+
+func TestA10TrustMaterialPresenceExcludesDefaultTimeout(t *testing.T) {
+	var parsed Options
+	_, err := flags.ParseArgs(&parsed, nil)
+	require.NoError(t, err)
+	require.False(t, parsed.A10.Enabled)
+	require.Equal(t, 10, parsed.A10.KeysetRequestTimeoutSeconds)
+	require.False(t, parsed.A10.HasTrustMaterial())
+
+	parsed.A10.PinnedRootKeyID = "configured"
+	require.True(t, parsed.A10.HasTrustMaterial())
+}
