@@ -9,11 +9,12 @@ behavior and variable semantics) and
 (normative for acceptance state). Where this plan and those documents
 disagree, they win.
 
-The deployable configuration is the **blocked audit mode**: API + V3 listener,
+The deployable configuration is the **blocked audit mode**: API + V4 listener,
 secure vault, A9 disabled, `APNS_ENABLED=false` (the binary rejects `true`),
 Welcome hard-closed. It observes XMTP dev and proves runtime health; it
 delivers nothing. A9/APNs activation is a separate, later, human-authorized
-change with its own gates.
+change with its own gates. V4 is pinned early only to remove a live-command
+edit from that later ceremony; it does not activate A9.
 
 ## 1. Service definition
 
@@ -60,7 +61,7 @@ Never print, copy, or log values. Set in the Railway service UI only.
 | `BRIDGE_TEEN_CONVERSATION_MODE` | `disabled` | literal |
 | `APNS_ENABLED` | `false` | literal; startup rejects `true` in this build |
 | `XMTP_GRPC_ADDRESS` | `grpc.dev.xmtp.network:443` | literal |
-| `LISTENER_TYPE` | `v3` | literal (A9 mode would need `v4`; do not mix modes) |
+| `LISTENER_TYPE` | `v4` | literal; A9 remains disabled until its separate reviewed ceremony |
 | `API_PORT` | service port | Railway |
 | `LOG_ENCODING` / `LOG_LEVEL` | `json` / `info` | literal |
 

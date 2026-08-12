@@ -35,14 +35,18 @@ ENV GOTRACEBACK=none
 # go-waku default port
 EXPOSE 8080
 
-RUN apk add --no-cache ca-certificates \
-    && addgroup -S bridge \
-    && adduser -S -D -H -G bridge bridge
+RUN apk add --no-cache ca-certificates su-exec \
+    && addgroup -S -g 10001 bridge \
+    && adduser -S -D -H -u 10001 -G bridge bridge \
+    && mkdir -p /var/lib/notifications-server/a9 \
+    && chown bridge:bridge /var/lib/notifications-server/a9 \
+    && chmod 0700 /var/lib/notifications-server/a9
 
 COPY --from=builder --chown=bridge:bridge /app/bin/notifications-server /usr/bin/
+COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/bridge-entrypoint
 
-USER bridge
+USER 10001:10001
 
-ENTRYPOINT ["/usr/bin/notifications-server"]
+ENTRYPOINT ["/usr/local/bin/bridge-entrypoint"]
 # By default just show help if called without arguments
 CMD ["--help"]

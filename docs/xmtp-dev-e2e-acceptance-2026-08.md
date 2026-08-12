@@ -151,8 +151,8 @@ not inspect those artifacts; it must not be treated as their clearance.
 | Item | Current verified state | Human action before any deploy |
 | --- | --- | --- |
 | Dockerfile | Pinned Go/alpine bases; non-root runtime user; build args default to `unknown` | Produce an image with recorded commit/version provenance. Do not treat `unknown` as release provenance |
-| Secret material | Dockerfile has no provisioned restricted TOPIC/TLS files | Establish a Railway-supported, audited restricted-file mount plan; do not move any secret into an environment string or this repository |
-| `railway.toml` | Blocked audit mode: V3 listener, secure vault, public API, `/readyz` | It does **not** enable A9. Do not edit/deploy it as though it did |
+| Secret material | Dockerfile has a UID/GID `10001:10001` bridge-owned `0700` target and a root-to-bridge drop entrypoint; no secret is baked into the image | Human approval is still required to attach the persistent Railway volume at `/var/lib/notifications-server/a9`, set `RAILWAY_RUN_UID=0`, and perform the deployment-instance SSH stdin-only one-shot ceremony using the three fixed basenames; never move a secret into an environment string or this repository |
+| `railway.toml` | Audit mode: V4 listener, secure vault, public API, `/readyz`; A9 remains default-off with no trust material | V4 removes a later live-command edit but does **not** enable A9. Do not deploy/activate A9 without its separate reviewed ceremony |
 | Runtime QA compose | API-only V4, `HYTCH_SECURE_VAULT=false`, A9/APNS/Welcome false | Useful offline regression harness only; not a secure deployment template |
 | Schema deployment | Secure runtime verifies but never migrates | A separate owner-only migration job and its preflight are required after explicit human authorization; runtime never receives `MIGRATION_DB_CONNECTION_STRING` |
 
@@ -160,7 +160,7 @@ not inspect those artifacts; it must not be treated as their clearance.
 
 | Category | Current audit mode | Future A9 private-listener candidate |
 | --- | --- | --- |
-| Listener | V3; public API + listener as checked in | V4 plus XMTP listener; private TLS listener required |
+| Listener | V4; public API + listener as checked in; A9 off | V4 plus XMTP listener; private TLS listener required |
 | Authentication | `BRIDGE_API_BEARER_TOKEN` is the audit-mode mechanism | `BRIDGE_API_BEARER_TOKEN` absent; one-use root-keyset-verified service JWS only |
 | Vault | `HYTCH_SECURE_VAULT=true`, `BRIDGE_VAULT_MASTER_KEYS_JSON`, `BRIDGE_VAULT_LOOKUP_KEY` | Same vault material plus a restricted non-owner runtime DB credential |
 | A9 | Disabled | `BRIDGE_A9_ENABLED=true`, `BRIDGE_A9_KEYSET_ORIGIN`, root public key/key ID, private numeric bind, and bounded timeouts |

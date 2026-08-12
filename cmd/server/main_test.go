@@ -160,6 +160,21 @@ func TestA9RuntimeConfigurationRejectsDisabledMaterialAndDowngrades(
 	require.True(t, a9RuntimeConfigurationValid(wildcard))
 }
 
+func TestRailwayA9RuntimeRequiresFixedPersistentVolumePaths(t *testing.T) {
+	config := validA9RuntimeOptions(t)
+	t.Setenv("RAILWAY_PROJECT_ID", "fixture-project")
+	require.False(t, a9RuntimeConfigurationValid(config))
+
+	config.A9.TopicCommitmentKeysFilePath = a9RailwayTopicKeysPath
+	config.A9.TLSCertificateFilePath = a9RailwayTLSCertificatePath
+	config.A9.TLSPrivateKeyFilePath = a9RailwayTLSPrivateKeyPath
+	require.True(t, a9RuntimeConfigurationValid(config))
+
+	config.A9.TLSPrivateKeyFilePath =
+		a9RailwayMaterialDirectory + "/../a9/tls-private-key.pem"
+	require.False(t, a9RuntimeConfigurationValid(config))
+}
+
 func TestCheckedXMTPWorkerCountRejectsInvalidAndOverflowValues(t *testing.T) {
 	for _, workers := range []int{
 		-math.MaxInt - 1,
@@ -336,15 +351,54 @@ func TestRailwayDevConfigPinsDevelopmentEnvironments(t *testing.T) {
 	require.Contains(
 		t,
 		startCommand,
+		`startCommand = "/usr/local/bin/bridge-entrypoint --api`,
+	)
+	require.NotContains(
+		t,
+		startCommand,
+		`startCommand = "/usr/bin/notifications-server`,
+	)
+	require.Contains(
+		t,
+		startCommand,
 		"--bridge-environment=dev",
 	)
 	require.Contains(t, startCommand, "--apns-mode=development")
+	require.Contains(t, startCommand, "--listener-type=v4")
+	require.NotContains(t, startCommand, "--listener-type=v3")
 	require.Contains(
 		t,
 		startCommand,
 		"--bridge-teen-conversation-mode=disabled",
 	)
 	require.NotContains(t, strings.ToLower(startCommand), "production")
+
+	dockerfile, err := os.ReadFile("../../Dockerfile")
+	require.NoError(t, err)
+	require.Contains(t, string(dockerfile), "su-exec")
+	require.Contains(t, string(dockerfile), "addgroup -S -g 10001 bridge")
+	require.Contains(t, string(dockerfile), "adduser -S -D -H -u 10001")
+	require.Contains(t, string(dockerfile), "USER 10001:10001")
+	require.Contains(
+		t,
+		string(dockerfile),
+		"ENTRYPOINT [\"/usr/local/bin/bridge-entrypoint\"]",
+	)
+
+	entrypoint, err := os.ReadFile("../../docker-entrypoint.sh")
+	require.NoError(t, err)
+	entrypointSource := string(entrypoint)
+	require.Contains(
+		t,
+		entrypointSource,
+		"/var/lib/notifications-server/a9",
+	)
+	require.Contains(t, entrypointSource, "RAILWAY_VOLUME_MOUNT_PATH")
+	require.Contains(
+		t,
+		entrypointSource,
+		"exec su-exec bridge:bridge /usr/bin/notifications-server",
+	)
 }
 
 func TestSecureRuntimeSchemaGateNeverAppliesPendingMigration(t *testing.T) {

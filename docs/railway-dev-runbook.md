@@ -83,9 +83,11 @@ corresponding modern-api/iOS vector suite passes.
   is intentional. PostgreSQL queue claims are lease-protected across rolling
   replicas, but APNS is still at-least-once across a crash after Apple accepts a
   notification and before the success deletion commits.
-- Use the checked-in `railway.toml`. It runs API plus V3 listener against XMTP
-  dev and enables the secure vault. This blocked audit configuration does not
-  activate A9; dormant A9 mode requires a V4 listener and rejects V3. The
+- Use the checked-in `railway.toml`. It runs API plus V4 listener against XMTP
+  dev and enables the secure vault. This audit configuration does not activate
+  A9: every A9 flag and trust-material setting still defaults absent/off. V4 is
+  pinned now so the later reviewed ceremony never hand-edits a live start
+  command. The
   configuration supplies no delivery service: `APNS_ENABLED` must remain
   false, and startup rejects true. The listener may consume XMTP for
   health/audit behavior with zero delivery services.
@@ -188,12 +190,12 @@ the same reviewed implementation:
 Required listener/runtime variables:
 
 - `XMTP_GRPC_ADDRESS=grpc.dev.xmtp.network:443`
-- `LISTENER_TYPE=v3`
+- `LISTENER_TYPE=v4`
 - `API_PORT`
 - `LOG_ENCODING`
 - `LOG_LEVEL`
 
-The dormant A9 configuration instead requires `LISTENER_TYPE=v4`, forbids
+The dormant A9 configuration also requires `LISTENER_TYPE=v4`, forbids
 `BRIDGE_API_BEARER_TOKEN`, and adds the A9 names and restricted file mounts
 listed below. Do not mix the two configuration sets.
 
@@ -256,11 +258,11 @@ A future separately approved A9 exercise would require these exact names:
 - `BRIDGE_A9_KEYSET_ORIGIN`
 - `BRIDGE_A9_PINNED_ROOT_PUBLIC_KEY`
 - `BRIDGE_A9_PINNED_ROOT_KEY_ID`
-- `BRIDGE_A9_TOPIC_COMMITMENT_KEYS_FILE_PATH`
+- `BRIDGE_A9_TOPIC_COMMITMENT_KEYS_FILE_PATH=/var/lib/notifications-server/a9/topic-commitment-keys.json`
 - `BRIDGE_A9_PRIVATE_BIND=127.0.0.1:9443`
 - `BRIDGE_A9_ALLOW_WILDCARD_PRIVATE_BIND=false`
-- `BRIDGE_A9_TLS_CERTIFICATE_FILE_PATH`
-- `BRIDGE_A9_TLS_PRIVATE_KEY_FILE_PATH`
+- `BRIDGE_A9_TLS_CERTIFICATE_FILE_PATH=/var/lib/notifications-server/a9/tls-certificate.pem`
+- `BRIDGE_A9_TLS_PRIVATE_KEY_FILE_PATH=/var/lib/notifications-server/a9/tls-private-key.pem`
 - `BRIDGE_A9_KEYSET_REQUEST_TIMEOUT_SECONDS=10`
 - `BRIDGE_A9_READ_HEADER_TIMEOUT_SECONDS=5`
 - `BRIDGE_A9_READ_TIMEOUT_SECONDS=15`
@@ -290,6 +292,217 @@ files, each nonempty and no larger than 1 MiB. Both reject symlinks, executable
 bits, and special mode bits. The certificate must be owner-readable and not
 group/other-writable; the private key must be owner-readable with no
 group/other permissions. Their input buffers are cleared after loading.
+
+### Content-free A9 material provisioning and preflight
+
+The candidate binary has two CLI-only one-shot modes. Neither mode starts a
+logger, database connection, API, XMTP listener, A9 listener, APNS client, or
+worker. They emit fixed status plus variable names only; they never emit a
+material value or filesystem path.
+
+Run the provisioning mode inside the exact active `dev-xmtp-bridge` deployment.
+The checked-in entrypoint drops from Railway's mount-repair UID to the image's
+fixed `bridge` UID/GID `10001:10001`; that numeric identity is a persistent
+volume ABI and must not change across image upgrades. Deliver material only on
+standard input. Do not put it in an argument, environment string, shell
+history, Railway command, log, or PR comment.
+
+Before any credential is supplied, a human must approve the cost/deploy
+ceremony and attach one persistent Railway volume to `dev-xmtp-bridge` at the
+exact mount path `/var/lib/notifications-server/a9`. Railway exposes that exact
+path as `RAILWAY_VOLUME_MOUNT_PATH`. Set `RAILWAY_RUN_UID=0` so the checked-in
+entrypoint can set only that mount root to owner `bridge:bridge` and mode
+`0700`, then immediately `su-exec` the server as the unprivileged `bridge`
+account. The entrypoint fails closed for a Railway A9 one-shot or enabled A9
+runtime unless the reported mount path is exact. Do not use `/tmp`, an
+ephemeral image directory, a second volume, or an environment-string secret.
+Volume creation/attachment, `RAILWAY_RUN_UID`, and every Railway variable write
+remain human actions; this runbook is not deploy or spend authorization.
+
+Before provisioning, verify without listing contents that the mount exists,
+is a real directory (not a symlink), is owned by numeric UID/GID `10001:10001`,
+has mode `0700`, and survives a no-A9 redeploy. Require exactly one replica:
+Railway volumes do not support concurrent replicas. The ordinary audit-only
+bridge process may remain alive during SSH provisioning, but no other shell,
+provisioner, or maintenance process may run as UID `10001`; this benign sibling
+runtime already has the same Unix authority as the material reader.
+
+Use Railway CLI `5.34.2` or a later reviewed version. First select the project,
+DEV environment, service, and sole active deployment instance explicitly. Run
+a non-secret empty-stdin sentinel over `railway ssh -d <instance>` using the
+topic provision command below; require nonzero status, empty stdout, exact
+`a9_material=fail` stderr, and no created file. Do not rely on exit status alone.
+Railway CLI issue #1029 affected remote command execution in an older release.
+`railway run` and `railway shell` run locally and cannot access the attached
+volume. See Railway's [SSH](https://docs.railway.com/cli/ssh),
+[run](https://docs.railway.com/cli/run), and
+[shell](https://docs.railway.com/cli/shell) contracts.
+Railway's Dockerfile [Start Command](https://docs.railway.com/deployments/start-command)
+overrides the image `ENTRYPOINT`; therefore the checked-in `railway.toml` and
+every SSH command explicitly begin `/usr/local/bin/bridge-entrypoint`. A direct
+`/usr/bin/notifications-server` Railway command is a security-boundary bypass.
+
+For each item below, use a Bash-only, `set -e`/`set +x` wrapper that reads from
+`/dev/tty` with terminal echo disabled and an EXIT/HUP/INT/TERM trap that
+restores echo and unsets the non-exported variable. Pipe Bash builtin `printf`
+directly to `railway ssh -p <project> -e <dev> -s <service> -d <instance> --`
+followed by exactly one command below. The pipe forces non-PTY SSH; never use
+`tee`, a file, command substitution, or an external `printf`. Check the SSH
+pipeline's status and the exact fixed receipt, then unset the value. Railway
+documents stdin forwarding, but does not promise that the provider cannot
+observe SSH stream bytes; this ceremony proves absence from application
+stdout/stderr, argv, environment, and repository—not absolute provider
+non-observation.
+
+The Bash wrapper shape is:
+
+```bash
+(
+  set -e
+  set +x
+  unset a9_secret
+  a9_secret=''
+  a9_echo_restore_required=false
+  cleanup() {
+    if [ "$a9_echo_restore_required" = true ]; then
+      stty echo </dev/tty 2>/dev/null || :
+    fi
+    unset a9_secret a9_echo_restore_required a9_pipe_status
+  }
+  abort() {
+    trap - HUP INT TERM
+    exit 1
+  }
+  trap cleanup EXIT
+  trap abort HUP INT TERM
+  printf 'Paste material, then Ctrl-D: ' >&2
+  a9_echo_restore_required=true
+  stty -echo </dev/tty
+  IFS= read -r -d '' a9_secret </dev/tty || :
+  stty echo </dev/tty
+  a9_echo_restore_required=false
+  printf '\n' >&2
+  set +e
+  builtin printf '%s' "$a9_secret" |
+    railway ssh -p '<project>' -e '<dev>' -s '<service>' -d '<instance>' -- \
+      /usr/local/bin/bridge-entrypoint \
+      --provision-a9-material=topic-commitment-keys \
+      --a9-topic-commitment-keys-file-path=/var/lib/notifications-server/a9/topic-commitment-keys.json
+  a9_pipe_status=("${PIPESTATUS[@]}")
+  set -e
+  if [ "${a9_pipe_status[0]}" -eq 0 ] && [ "${a9_pipe_status[1]}" -eq 0 ]; then
+    a9_rc=0
+  elif [ "${a9_pipe_status[1]}" -ne 0 ]; then
+    a9_rc=${a9_pipe_status[1]}
+  else
+    a9_rc=${a9_pipe_status[0]}
+  fi
+  unset a9_secret
+  exit "$a9_rc"
+)
+```
+
+Substitute only the fixed provision kind and its fixed path for the other two
+invocations. Never paste a value into a placeholder or command line.
+
+```text
+/usr/local/bin/bridge-entrypoint --provision-a9-material=topic-commitment-keys --a9-topic-commitment-keys-file-path=/var/lib/notifications-server/a9/topic-commitment-keys.json
+/usr/local/bin/bridge-entrypoint --provision-a9-material=tls-certificate --a9-tls-certificate-file-path=/var/lib/notifications-server/a9/tls-certificate.pem
+/usr/local/bin/bridge-entrypoint --provision-a9-material=tls-private-key --a9-tls-private-key-file-path=/var/lib/notifications-server/a9/tls-private-key.pem
+```
+
+Each invocation creates exactly one new nonempty regular file at mode `0600`,
+owned by the current bridge user. It rejects relative or unclean paths,
+a symlinked or writable-by-group/others destination directory, existing
+destinations, empty input, TOPIC input over 64 KiB, TLS input over 1 MiB,
+metadata races, and non-durable output reporting. Before exclusive creation,
+a failure creates nothing. After exclusive creation, any write, durability,
+panic, path-identity, or acknowledgement ambiguity deliberately retains the
+restricted file; stderr emits the fixed `a9_material=fail` receipt, while
+stdout may be absent, truncated, or ambiguous after a transport/output fault.
+The process never unlinks by path, because doing so could delete a raced-in
+replacement. A retry therefore fails `EEXIST` and cannot overwrite the retained
+file. Treat every file from a failed invocation as quarantined evidence: never
+activate it, even if metadata preflight passes, because the intended input may
+be incomplete. Reviewed deletion and fresh provisioning from the authoritative
+source are required. Success prints `a9_material_provision=pass`
+followed by exactly one of these names:
+
+- `BRIDGE_A9_TOPIC_COMMITMENT_KEYS_FILE_PATH`
+- `BRIDGE_A9_TLS_CERTIFICATE_FILE_PATH`
+- `BRIDGE_A9_TLS_PRIVATE_KEY_FILE_PATH`
+
+The focused production-image boundary gate is `make a9-provisioning-qa`. It
+builds the exact candidate Dockerfile and exercises Alpine, root-to-UID-10001
+drop, persistent-volume ownership, fixed failure receipts, and the three
+one-shot paths. The required `make runtime-qa` and `make runtime-qa-full` gates
+depend on it; a Go-only test run is not a substitute.
+
+After all three successful receipts, run the content-free preflight over the
+same deployment-instance SSH channel with CLI path flags. This avoids staging
+trust-material environment variables while A9 is disabled (a deliberate
+startup rejection) and validates the exact future runtime shape before the
+separate activation-variable ceremony:
+
+```text
+/usr/local/bin/bridge-entrypoint --preflight-a9-runtime-files --api --xmtp-listener --listener-type=v4 --hytch-secure-vault --bridge-api-bearer-token= --a9-enabled --a9-keyset-origin=https://<reviewed-private-modern-api-origin> --a9-pinned-root-public-key=<reviewed-public-value> --a9-pinned-root-key-id=<reviewed-public-key-id> --a9-topic-commitment-keys-file-path=/var/lib/notifications-server/a9/topic-commitment-keys.json --a9-private-bind=127.0.0.1:9443 --a9-tls-certificate-file-path=/var/lib/notifications-server/a9/tls-certificate.pem --a9-tls-private-key-file-path=/var/lib/notifications-server/a9/tls-private-key.pem
+```
+
+Require `a9_material_preflight=pass` and the three variable names above. The
+preflight applies the exact `a9RuntimeConfigurationValid` boundary and then
+checks, without reading contents, that all three paths are distinct, absolute,
+nonempty, stable regular files beneath no-symlink, non-writable ancestors and
+owned by the bridge user. It applies the runtime metadata contract exactly:
+TOPIC/private-key files may be `0400` or `0600`; certificates may additionally
+be group/other-readable but never executable or group/other-writable. Special
+mode bits are rejected. Provisioning always creates `0600`. Any parse,
+configuration, metadata, I/O, output, or panic failure emits fixed
+`a9_material=fail` on stderr; stdout may be truncated if its writer fails.
+
+Provisioning and preflight walk every ancestor and open every final entry
+descriptor-relatively with `O_NOFOLLOW`; file identity is held through fsync,
+path revalidation, and the final pre-acknowledgement check. Filesystem
+publication and stdout acknowledgement cannot be atomic, so acknowledgement
+failure retains the file as described above. The ordinary audit-only bridge
+process sharing UID `10001` during this ceremony is explicitly trusted and
+benign. The adversary model excludes a malicious or compromised same-UID
+process, root, the container orchestrator, and the storage provider: any of
+those principals can read or replace material regardless of descriptor checks.
+The `0700` mount, one-replica rule, and one-shot ceremony make that boundary
+explicit rather than silently relying on path checks.
+
+Provisioning and preflight do not authorize activation. Before the activation
+ceremony, verify by a name-only Railway variable listing that
+`BRIDGE_API_BEARER_TOKEN` is absent. A nonempty legacy bearer is a deliberate
+A9 startup rejection. Also require the checked-in/start-command listener type
+to be V4; A9 cannot run with V3.
+
+### Exact A9 rollback set
+
+Do not roll back by clearing only `BRIDGE_A9_ENABLED`. Disabled A9 rejects any
+remaining trust material, so that partial rollback bricks startup. In one
+reviewed Railway DEV change, set `BRIDGE_A9_ENABLED=false`, clear all eight
+fields reported by `A9Options.HasTrustMaterial`, and restore V3 as required by
+the accepted rollback contract:
+
+1. clear `BRIDGE_A9_KEYSET_ORIGIN`;
+2. clear `BRIDGE_A9_PINNED_ROOT_PUBLIC_KEY`;
+3. clear `BRIDGE_A9_PINNED_ROOT_KEY_ID`;
+4. clear deprecated `BRIDGE_A9_TOPIC_COMMITMENT_KEYS_JSON` if present;
+5. clear `BRIDGE_A9_TOPIC_COMMITMENT_KEYS_FILE_PATH`;
+6. remove `BRIDGE_A9_ALLOW_WILDCARD_PRIVATE_BIND`;
+7. clear `BRIDGE_A9_TLS_CERTIFICATE_FILE_PATH`;
+8. clear `BRIDGE_A9_TLS_PRIVATE_KEY_FILE_PATH`;
+9. restore `LISTENER_TYPE=v3` / `--listener-type=v3` in the prior deployment
+   command.
+
+If the pre-activation DEV service used `BRIDGE_API_BEARER_TOKEN`, restore its
+existing secret reference as a separate credential-controlled step; never
+copy or display its value. Leave the provisioned files in place during
+rollback. Deleting or replacing them is a separate irreversible/credential
+ceremony, not a startup-recovery step. Verify `/livez`, `/readyz`, the exact
+deployed SHA, and the name-only absence of all eight A9 material fields before
+closing rollback.
 
 ### Private transport and one-use service authentication
 
@@ -532,7 +745,7 @@ unknown replica.
    database and the four-relation deletion scope.
 3. From the exact candidate image, run a separate private job with only
    `MIGRATION_DB_CONNECTION_STRING` and
-   `/usr/bin/notifications-server --migrate-only`. This applies migrations and
+   `/usr/local/bin/bridge-entrypoint --migrate-only`. This applies migrations and
    exits without starting an API, listener, worker, or delivery client. Do not
    configure this owner DSN on the bridge service.
 4. After migration and before activation, run the exact candidate binary's
@@ -540,7 +753,7 @@ unknown replica.
    `MIGRATION_DB_CONNECTION_STRING` is already loaded:
 
    ```bash
-   /usr/bin/notifications-server --preflight-legacy-retirement
+   /usr/local/bin/bridge-entrypoint --preflight-legacy-retirement
    ```
 
    For a local candidate built at `dist/server`, the equivalent guarded wrapper
@@ -693,6 +906,7 @@ export/import and destructive restore rehearsal remain manual and
    ```bash
    git diff --check
    test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
+   make runtime-qa-full
    ./dev/gen-sqlc
    git diff --exit-code -- pkg/db/queries
    VAULT_INTEGRATION_TESTS=1 go test -p 1 -count=1 ./...

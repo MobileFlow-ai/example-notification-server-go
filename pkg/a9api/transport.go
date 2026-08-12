@@ -413,3 +413,10 @@ func validTransportFileInfo(
 	}
 	return permissions&0o022 == 0
 }
+
+// TransportFileMetadataValid exposes the exact content-free TLS file metadata
+// contract used by the private A9 runtime. One-shot preflight uses this helper
+// so a preflight pass cannot accept a file that runtime startup rejects.
+func TransportFileMetadataValid(info os.FileInfo, private bool) bool {
+	return validTransportFileInfo(info, private)
+}
