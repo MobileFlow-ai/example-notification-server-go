@@ -150,7 +150,7 @@ func runServer() {
 		}
 		return
 	}
-	if !apnsRuntimeConfigurationValid(opts.Apns.Enabled) {
+	if !apnsRuntimeConfigurationValid(opts) {
 		logger.Fatal("APNS egress unavailable in this build")
 	}
 	if !welcomeRuntimeConfigurationValid(opts.Vault.WelcomeEnabled) {
@@ -158,6 +158,9 @@ func runServer() {
 	}
 	if !a9RuntimeConfigurationValid(opts) {
 		logger.Fatal("A9 authority configuration invalid")
+	}
+	if !a10RuntimeConfigurationValid(opts) {
+		logger.Fatal("A10 registration configuration invalid")
 	}
 	if opts.MigrationDbConnectionString != "" {
 		logger.Fatal("migration credential present in runtime")
@@ -211,6 +214,7 @@ func runServer() {
 	var erasureWorker *delivery.InvalidTokenErasureWorker
 	var a9TrustHandle *vault.A9TrustHandle
 	var a9ControlRuntime *a9Runtime
+	var a10RegistrationRuntime *a10Runtime
 	if opts.Vault.Enabled {
 		var parseErr error
 		encryptionKeys, parseErr = vault.ParseKeyring(opts.Vault.MasterKeysJSON)
@@ -302,6 +306,19 @@ func runServer() {
 		)
 		if err != nil {
 			logger.Fatal("A9 authority initialization failed")
+		}
+	}
+	if opts.A10.Enabled {
+		a10RegistrationRuntime, err = initializeA10Runtime(
+			ctx,
+			opts.A10,
+			opts.Vault.Environment,
+			opts.Apns.Topic,
+			db,
+			secureStore,
+		)
+		if err != nil {
+			logger.Fatal("A10 registration initialization failed")
 		}
 	}
 	var notifListener xmtp.NotificationListener
@@ -416,10 +433,13 @@ func runServer() {
 
 	if opts.Api.Enabled {
 		apiServer = api.NewApiServer(logger, opts.Api, installationsService, subscriptionsService, interfaces.ListenerType(opts.Xmtp.ListenerType))
-		if opts.A9.Enabled {
-			apiServer.DisableLegacyMutationAPI()
-		} else if secureRegistration != nil {
-			apiServer.EnableSecureRegistration(secureRegistration)
+		if err = configureRuntimeRegistrationAPI(
+			apiServer,
+			opts.A9.Enabled,
+			secureRegistration,
+			a10RegistrationRuntime,
+		); err != nil {
+			logger.Fatal("failed to enable A10 registration")
 		}
 		if notifListener != nil {
 			apiServer.SetXMTPReadyCheck(notifListener.Ready)
@@ -440,6 +460,10 @@ func runServer() {
 			if a9ControlRuntime != nil &&
 				(!a9ControlRuntime.private.Ready() ||
 					!a9TrustReady(a9ControlRuntime.manager)) {
+				return false
+			}
+			if a10RegistrationRuntime != nil &&
+				!a10TrustReady(a10RegistrationRuntime.manager) {
 				return false
 			}
 			if retentionSweeper == nil {
@@ -523,6 +547,14 @@ func runServer() {
 		go runA9RefreshWorker(
 			ctx,
 			a9ControlRuntime.manager,
+			logger,
+			cancel,
+		)
+	}
+	if a10RegistrationRuntime != nil {
+		go runA10RefreshWorker(
+			ctx,
+			a10RegistrationRuntime.manager,
 			logger,
 			cancel,
 		)
@@ -677,12 +709,71 @@ func runServer() {
 	}
 }
 
+func configureRuntimeRegistrationAPI(
+	apiServer *api.ApiServer,
+	a9Enabled bool,
+	secureRegistration *registration.Handler,
+	a10RegistrationRuntime *a10Runtime,
+) error {
+	if apiServer == nil {
+		return api.ErrAPIUnavailable
+	}
+	if a9Enabled {
+		apiServer.DisableLegacyMutationAPI()
+	} else if secureRegistration != nil {
+		apiServer.EnableSecureRegistration(secureRegistration)
+	}
+	if a10RegistrationRuntime == nil {
+		return nil
+	}
+	return apiServer.EnableA10Registration(
+		a10RegistrationRuntime.handler,
+	)
+}
+
 func welcomeRuntimeConfigurationValid(enabled bool) bool {
 	return !enabled
 }
 
-func apnsRuntimeConfigurationValid(enabled bool) bool {
-	return !enabled
+func apnsRuntimeConfigurationValid(config options.Options) bool {
+	if !config.Apns.Enabled {
+		return true
+	}
+	return config.A10.Enabled &&
+		config.A9.Enabled &&
+		config.Vault.Enabled &&
+		config.Api.Enabled &&
+		config.Xmtp.ListenerEnabled &&
+		config.Xmtp.ListenerType == "v4" &&
+		config.Vault.Environment == "dev" &&
+		config.Apns.SecureWrapperRequired &&
+		config.Apns.SecureEnvironment == "dev" &&
+		config.Apns.Topic == "com.mobileflow.hytchdev" &&
+		config.Apns.Mode == "development" &&
+		config.Apns.P8Certificate == "" &&
+		config.Apns.P8CertificateBase64 != "" &&
+		config.Apns.P8CertificateFilePath == "" &&
+		config.Apns.KeyId != "" &&
+		config.Apns.TeamId != ""
+}
+
+func a10RuntimeConfigurationValid(config options.Options) bool {
+	if !config.A10.Enabled {
+		return !config.A10.HasTrustMaterial()
+	}
+	return config.Apns.Enabled &&
+		config.A9.Enabled &&
+		config.Vault.Enabled &&
+		config.Api.Enabled &&
+		config.Xmtp.ListenerEnabled &&
+		config.Xmtp.ListenerType == "v4" &&
+		config.Vault.Environment == "dev" &&
+		config.A10.KeysetOrigin != "" &&
+		config.A10.PinnedRootPublicKeyBase64URL != "" &&
+		config.A10.PinnedRootKeyID != "" &&
+		config.A10.KeysetRequestTimeoutSeconds >= 1 &&
+		config.A10.KeysetRequestTimeoutSeconds <=
+			maxA9KeysetRequestTimeoutSeconds
 }
 
 func a9RuntimeConfigurationValid(config options.Options) bool {

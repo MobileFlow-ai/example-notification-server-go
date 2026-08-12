@@ -1,8 +1,8 @@
 # Bridge runtime QA
 
 This harness builds the current bridge image, applies all embedded migrations
-to an isolated Postgres container, starts the API-only dormant runtime, and
-checks exact health and Gate 6 outcomes.
+to an isolated Postgres container, starts the API-only dormant runtime, checks
+exact health and Gate 6 outcomes, and runs an activated A10 assembly probe.
 
 ## Ports
 
@@ -26,6 +26,15 @@ integration tests to the serial suite. The default target skips those tests,
 so a default green does not prove the A9 CAS layer; use the full target for
 any A9-related claim or merge gate.
 
+Both targets run `TestActivatedA10ServerAssemblyRuntimeQA` against the isolated
+Postgres service. The probe turns on the exact A9, A10, APNS, secure-vault,
+API, and V4-listener activation predicates, then crosses the production A10
+initializer, durable keyset/replay stores, encrypted vault sink, and public API
+mount. Its trust peer and HTTP server bind only to loopback and use synthetic
+test keys. It deliberately does not construct APNS or XMTP clients, so the
+positive assembly check cannot create external egress or consume deployment
+secrets.
+
 Both targets always remove their containers and volume on exit. For
 interactive inspection, use `make runtime-qa-up` and finish with
 `make runtime-qa-down`.
@@ -39,8 +48,13 @@ The harness verifies:
 - `/health/xmtp` returns `503 xmtp_unavailable` because the QA bridge is
   intentionally API-only and does not activate an XMTP listener;
 - `schema_migrations` records version 13 with `dirty=false`;
-- `APNS_ENABLED`, `BRIDGE_A9_ENABLED`, and `BRIDGE_WELCOME_ENABLED` are all
-  exactly `false` inside the bridge container; and
+- `APNS_ENABLED`, `BRIDGE_A9_ENABLED`,
+  `BRIDGE_A10_REGISTRATION_ENABLED`, and `BRIDGE_WELCOME_ENABLED` are all
+  exactly `false` inside the long-lived bridge container;
+- the separate loopback-only A10 probe enables the full activation predicate,
+  serves one successful registration through the assembled API, observes
+  encrypted persistence, rebuilds the runtime, and rejects the same credential
+  from the durable replay store;
 - the full serial Go suite runs against the isolated Postgres service through
   `BRIDGE_TEST_DSN`; and
 - the seeded Gate 6 cases reproduce

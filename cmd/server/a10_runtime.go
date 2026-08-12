@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/xmtp/example-notification-server-go/pkg/a10registration"
@@ -31,6 +32,14 @@ type a10Runtime struct {
 	handler *a10registration.Handler
 }
 
+// a10RuntimeDependencies keeps the production assembly path testable without
+// weakening its network boundary. The zero value is the only value used by
+// runServer; runtime QA supplies a loopback-only TLS client and a fixed clock.
+type a10RuntimeDependencies struct {
+	httpClient *http.Client
+	clock      func() time.Time
+}
+
 type a10ReadinessProvider interface {
 	CurrentA10Keyset(context.Context) ([]byte, error)
 }
@@ -41,6 +50,26 @@ type a10RefreshManager interface {
 }
 
 func initializeA10Runtime(ctx context.Context, config options.A10Options, environment, topic string, db *sql.DB, store *vault.Store) (*a10Runtime, error) {
+	return initializeA10RuntimeWithDependencies(
+		ctx,
+		config,
+		environment,
+		topic,
+		db,
+		store,
+		a10RuntimeDependencies{},
+	)
+}
+
+func initializeA10RuntimeWithDependencies(
+	ctx context.Context,
+	config options.A10Options,
+	environment string,
+	topic string,
+	db *sql.DB,
+	store *vault.Store,
+	dependencies a10RuntimeDependencies,
+) (*a10Runtime, error) {
 	if ctx == nil || !config.Enabled || db == nil || store == nil {
 		return nil, errA10RuntimeConfiguration
 	}
@@ -58,7 +87,9 @@ func initializeA10Runtime(ctx context.Context, config options.A10Options, enviro
 		Origin:         origin,
 		RootPin:        rootPin,
 		Store:          database.NewA10KeysetStore(db),
+		HTTPClient:     dependencies.httpClient,
 		RequestTimeout: time.Duration(config.KeysetRequestTimeoutSeconds) * time.Second,
+		Clock:          dependencies.clock,
 	})
 	if err != nil {
 		return nil, errA10RuntimeConfiguration
@@ -81,6 +112,7 @@ func initializeA10Runtime(ctx context.Context, config options.A10Options, enviro
 		Keysets:      manager,
 		Replay:       database.NewA10ReplayStore(db),
 		Sink:         sink,
+		Clock:        dependencies.clock,
 	})
 	if err != nil {
 		return nil, errA10RuntimeConfiguration

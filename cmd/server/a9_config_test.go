@@ -169,6 +169,25 @@ func validA9RuntimeOptions(t *testing.T) options.Options {
 	return config
 }
 
+func validA10RuntimeOptions(t *testing.T) options.Options {
+	t.Helper()
+	config := validA9RuntimeOptions(t)
+	config.A10.Enabled = true
+	config.A10.KeysetOrigin = "https://modern-api.internal"
+	config.A10.PinnedRootPublicKeyBase64URL = "a10-root-public"
+	config.A10.PinnedRootKeyID = "a10-root-key-id"
+	config.A10.KeysetRequestTimeoutSeconds = 10
+	config.Apns.Enabled = true
+	config.Apns.SecureWrapperRequired = true
+	config.Apns.SecureEnvironment = "dev"
+	config.Apns.P8CertificateBase64 = "railway-secret-reference"
+	config.Apns.KeyId = "key-id"
+	config.Apns.TeamId = "team-id"
+	config.Apns.Topic = "com.mobileflow.hytchdev"
+	config.Apns.Mode = "development"
+	return config
+}
+
 func writeA9TopicKeySource(
 	t *testing.T,
 	mode os.FileMode,
