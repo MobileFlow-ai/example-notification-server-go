@@ -7,7 +7,7 @@
 # Optional:
 #   BRIDGE_SMOKE_DSN  restricted read-only Postgres DSN; when set, the script
 #                     additionally asserts schema_migrations reads exactly
-#                     "12|false". Requires psql on PATH.
+#                     "13|false". Requires psql on PATH.
 #
 # The script sends no authenticated request, carries no bearer token, and
 # never prints a secret. It exits nonzero on the first contract violation.
@@ -81,9 +81,9 @@ if [ -n "${BRIDGE_SMOKE_DSN:-}" ]; then
     psql "$BRIDGE_SMOKE_DSN" -Atc \
       "SELECT version::text || '|' || dirty::text FROM schema_migrations;"
   )" || fail "schema_migrations query did not complete"
-  [ "$schema" = "12|false" ] || \
-    fail "schema_migrations '${schema}', expected '12|false'"
-  echo "ok schema_migrations 12|false"
+  [ "$schema" = "13|false" ] || \
+    fail "schema_migrations '${schema}', expected '13|false'"
+  echo "ok schema_migrations 13|false"
 fi
 
 echo "smoke passed: ${BRIDGE_BASE_URL}"

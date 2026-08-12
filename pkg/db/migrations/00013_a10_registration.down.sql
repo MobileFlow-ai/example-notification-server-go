@@ -1,3 +1,13 @@
+-- Downgrade is permitted only while v13 is completely dormant. Lock every
+-- A10 relation before checking emptiness so a concurrent writer cannot commit
+-- state in the gap between the check and the destructive drops.
+LOCK TABLE
+    hytch_push_vault.a10_accepted_keysets,
+    hytch_push_vault.a10_keyset_state,
+    hytch_push_vault.a10_registration_replays,
+    hytch_push_vault.a10_registration_bindings
+IN ACCESS EXCLUSIVE MODE;
+
 DO $block$
 BEGIN
     IF EXISTS (

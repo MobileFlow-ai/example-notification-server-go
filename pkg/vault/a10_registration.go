@@ -36,7 +36,7 @@ func (sink *A10RegistrationSink) RegisterVerified(ctx context.Context, registrat
 func (sink *A10RegistrationSink) registerVerified(ctx context.Context, registration a10registration.VerifiedRegistration, token []byte) error {
 	if sink == nil || sink.store == nil || ctx == nil || ctx.Err() != nil ||
 		registration.Environment != sink.store.environment || registration.APNSTopic != sink.topic ||
-		registration.PayloadSchema != "hytch_push_wrapper_v1" || len(token) < 1 || len(token) > 256 {
+		registration.PayloadSchema != "xmtp.encrypted.v4" || len(token) < 1 || len(token) > 256 {
 		return ErrStoreUnavailable
 	}
 	installationID := hex.EncodeToString(registration.InstallationID[:])

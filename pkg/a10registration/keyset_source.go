@@ -20,6 +20,8 @@ const (
 	KeysetWellKnownPath = "/.well-known/hytch-xmtp-push-registration-keyset-v1.json"
 	maxKeysetBodyBytes  = 32 * 1024
 	maxKeysetTimeout    = 30 * time.Second
+	maxRefreshInterval  = 6 * time.Hour
+	refreshExpiryLead   = 30 * time.Second
 )
 
 var (
@@ -86,7 +88,8 @@ type KeysetManagerOptions struct {
 }
 
 type keysetSnapshot struct {
-	accepted AcceptedKeyset
+	accepted    AcceptedKeyset
+	nextRefresh time.Time
 }
 
 // KeysetManager implements KeysetSource only when its exact local bytes still
@@ -111,9 +114,12 @@ func NewKeysetManager(options KeysetManagerOptions) (*KeysetManager, error) {
 		options.RequestTimeout < time.Second || options.RequestTimeout > maxKeysetTimeout {
 		return nil, ErrKeysetConfiguration
 	}
-	client := options.HTTPClient
-	if client == nil {
-		client = &http.Client{}
+	client := &http.Client{}
+	if options.HTTPClient != nil {
+		*client = *options.HTTPClient
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return ErrKeysetUnavailable
 	}
 	clock := options.Clock
 	if clock == nil {
@@ -161,7 +167,8 @@ func (manager *KeysetManager) Refresh(ctx context.Context) error {
 	if err != nil || len(raw) == 0 || len(raw) > maxKeysetBodyBytes {
 		return ErrKeysetUnavailable
 	}
-	accepted, err := manager.validateCandidate(raw, manager.clock().UTC())
+	now := manager.clock().UTC()
+	accepted, err := manager.validateCandidate(raw, now)
 	if err != nil {
 		return err
 	}
@@ -175,8 +182,19 @@ func (manager *KeysetManager) Refresh(ctx context.Context) error {
 	if !stateMatches(state, accepted) {
 		return ErrKeysetRejected
 	}
+	nextRefresh := now.Add(maxRefreshInterval)
+	expiryRefresh := accepted.ExpiresAt.Add(-refreshExpiryLead)
+	if expiryRefresh.Before(nextRefresh) {
+		nextRefresh = expiryRefresh
+	}
+	if nextRefresh.Before(now) {
+		nextRefresh = now
+	}
 	manager.mu.Lock()
-	manager.snapshot = &keysetSnapshot{accepted: cloneAccepted(accepted)}
+	manager.snapshot = &keysetSnapshot{
+		accepted:    cloneAccepted(accepted),
+		nextRefresh: nextRefresh,
+	}
 	manager.mu.Unlock()
 	return nil
 }
@@ -205,8 +223,9 @@ func (manager *KeysetManager) CurrentA10Keyset(ctx context.Context) ([]byte, err
 	return append([]byte(nil), accepted.CanonicalSignedObject...), nil
 }
 
-// NextRefresh returns the hard serving deadline of the exact in-memory
-// keyset. Callers should refresh before this time and fail readiness at it.
+// NextRefresh returns a bounded refresh deadline for the exact in-memory
+// keyset. It never permits a signed long-lived keyset to suppress periodic
+// durable-current revalidation until its expiry window.
 func (manager *KeysetManager) NextRefresh() (time.Time, bool) {
 	if manager == nil {
 		return time.Time{}, false
@@ -216,7 +235,7 @@ func (manager *KeysetManager) NextRefresh() (time.Time, bool) {
 	if manager.snapshot == nil {
 		return time.Time{}, false
 	}
-	return manager.snapshot.accepted.ExpiresAt, true
+	return manager.snapshot.nextRefresh, true
 }
 
 func (manager *KeysetManager) validateCandidate(raw []byte, now time.Time) (AcceptedKeyset, error) {

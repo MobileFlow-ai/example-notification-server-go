@@ -35,10 +35,10 @@ interactive inspection, use `make runtime-qa-up` and finish with
 The harness verifies:
 
 - `/livez` returns `200 ok`;
-- `/readyz` returns `200 ok` after migration 00012 is applied;
+- `/readyz` returns `200 ok` after migration 00013 is applied;
 - `/health/xmtp` returns `503 xmtp_unavailable` because the QA bridge is
   intentionally API-only and does not activate an XMTP listener;
-- `schema_migrations` records version 12 with `dirty=false`;
+- `schema_migrations` records version 13 with `dirty=false`;
 - `APNS_ENABLED`, `BRIDGE_A9_ENABLED`, and `BRIDGE_WELCOME_ENABLED` are all
   exactly `false` inside the bridge container; and
 - the full serial Go suite runs against the isolated Postgres service through

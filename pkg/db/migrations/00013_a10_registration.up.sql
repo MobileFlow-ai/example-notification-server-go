@@ -85,6 +85,10 @@ BEGIN
 END;
 $function$;
 
+REVOKE ALL
+    ON FUNCTION hytch_push_vault.reject_a10_immutable_mutation()
+    FROM PUBLIC;
+
 CREATE TRIGGER hytch_a10_keysets_update_guard
 BEFORE UPDATE ON hytch_push_vault.a10_accepted_keysets
 FOR EACH STATEMENT
@@ -136,6 +140,10 @@ BEGIN
     RETURN OLD;
 END;
 $function$;
+
+REVOKE ALL
+    ON FUNCTION hytch_push_vault.guard_a10_replay_delete()
+    FROM PUBLIC;
 
 CREATE TRIGGER hytch_a10_replays_update_guard
 BEFORE UPDATE ON hytch_push_vault.a10_registration_replays

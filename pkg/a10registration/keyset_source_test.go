@@ -83,8 +83,59 @@ func TestKeysetManagerRefreshesRootPinnedExactEndpointAndJoinsStore(t *testing.T
 	}
 	store.mu.Unlock()
 	refreshAt, ok := manager.NextRefresh()
-	if !ok || !refreshAt.Equal(store.state.ExpiresAt) {
-		t.Fatal("manager did not expose the exact keyset refresh deadline")
+	fixtureNow := time.Unix(fixture.FixtureTimeUnix, 0).UTC()
+	if !ok || refreshAt.After(fixtureNow.Add(maxRefreshInterval)) ||
+		!refreshAt.Before(store.state.ExpiresAt) {
+		t.Fatal("manager did not expose a bounded pre-expiry refresh deadline")
+	}
+}
+
+func TestKeysetManagerCapsRefreshCadenceForLongLivedKeyset(t *testing.T) {
+	fixture := readPositiveFixture(t)
+	raw, err := json.Marshal(fixture.Keyset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = mutateKeyset(t, raw, func(keyset map[string]any) {
+		keyset["expires_at"] = "2026-08-10T18:00:00.000Z"
+	}, nil)
+	manager, _ := newTestKeysetManager(t, fixtureHTTPClient(raw, nil), fixture)
+	if err = manager.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshAt, ok := manager.NextRefresh()
+	want := time.Unix(fixture.FixtureTimeUnix, 0).UTC().Add(maxRefreshInterval)
+	if !ok || !refreshAt.Equal(want) {
+		t.Fatalf("next refresh = %s, want %s", refreshAt, want)
+	}
+}
+
+func TestKeysetManagerRefusesRedirectsWithoutSecondRequest(t *testing.T) {
+	fixture := readPositiveFixture(t)
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header: http.Header{
+				"Location": {"https://redirected.internal" + KeysetWellKnownPath},
+			},
+			Body:    io.NopCloser(strings.NewReader("redirect")),
+			Request: request,
+		}, nil
+	})}
+	manager, store := newTestKeysetManager(t, client, fixture)
+	if err := manager.Refresh(t.Context()); !errors.Is(err, ErrKeysetUnavailable) {
+		t.Fatalf("redirect error = %v, want unavailable", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("redirect caused %d requests, want exactly one", attempts)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.state.Sequence != 0 {
+		t.Fatal("redirected keyset reached durable acceptance")
 	}
 }
 

@@ -31,6 +31,15 @@ type a10Runtime struct {
 	handler *a10registration.Handler
 }
 
+type a10ReadinessProvider interface {
+	CurrentA10Keyset(context.Context) ([]byte, error)
+}
+
+type a10RefreshManager interface {
+	Refresh(context.Context) error
+	NextRefresh() (time.Time, bool)
+}
+
 func initializeA10Runtime(ctx context.Context, config options.A10Options, environment, topic string, db *sql.DB, store *vault.Store) (*a10Runtime, error) {
 	if ctx == nil || !config.Enabled || db == nil || store == nil {
 		return nil, errA10RuntimeConfiguration
@@ -79,7 +88,7 @@ func initializeA10Runtime(ctx context.Context, config options.A10Options, enviro
 	return &a10Runtime{manager: manager, handler: handler}, nil
 }
 
-func a10TrustReady(manager *a10registration.KeysetManager) bool {
+func a10TrustReady(manager a10ReadinessProvider) bool {
 	if manager == nil {
 		return false
 	}
@@ -89,7 +98,7 @@ func a10TrustReady(manager *a10registration.KeysetManager) bool {
 	return err == nil && ctx.Err() == nil
 }
 
-func runA10RefreshWorker(ctx context.Context, manager *a10registration.KeysetManager, runtimeLogger *zap.Logger, cancel context.CancelFunc) {
+func runA10RefreshWorker(ctx context.Context, manager a10RefreshManager, runtimeLogger *zap.Logger, cancel context.CancelFunc) {
 	defer func() {
 		if recover() != nil {
 			if runtimeLogger != nil {
@@ -115,10 +124,7 @@ func runA10RefreshWorker(ctx context.Context, manager *a10registration.KeysetMan
 			}
 			return
 		}
-		wakeAt := deadline.Add(-a10RefreshLeadTime)
-		if deadline.Equal(successfulDeadline) {
-			wakeAt = deadline
-		}
+		wakeAt := a10RefreshWakeAt(deadline, successfulDeadline)
 		if !waitUntilA9Refresh(ctx, wakeAt) {
 			return
 		}
@@ -144,4 +150,11 @@ func runA10RefreshWorker(ctx context.Context, manager *a10registration.KeysetMan
 			return
 		}
 	}
+}
+
+func a10RefreshWakeAt(nextRefresh, successfulDeadline time.Time) time.Time {
+	if nextRefresh.Equal(successfulDeadline) {
+		return nextRefresh
+	}
+	return nextRefresh.Add(-a10RefreshLeadTime)
 }

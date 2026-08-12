@@ -386,6 +386,135 @@ prerequisite set before it may mount the route or remove the APNS hard-close.
 No migration, Railway variable, root ceremony, APNS credential, deployment,
 or provider call is authorized by this source.
 
+### Migration 13 restricted-runtime grant ceremony
+
+Migration 13 deliberately revokes public access and does not guess the name of
+a deployment-specific runtime role. Consequently, applying the migration as
+the owner is not sufficient to activate A10: the restricted runtime credential
+cannot use the four new tables until an operator performs this separate grant
+ceremony. Perform it only in the private migration job, with every bridge
+replica stopped, after independently verifying the dedicated dev database,
+clean `13|false` schema state, exact candidate image, and exact runtime role.
+It does not authorize mounting A10 or enabling APNS.
+
+In an owner `psql` session, set `runtime_role` to the already-created exact
+non-owner role and run the transaction below. Do not substitute the migration
+owner, a shared role, or a role name obtained from unverified output.
+
+```sql
+\set ON_ERROR_STOP on
+\set runtime_role bridge_runtime_dev
+
+BEGIN;
+
+REVOKE ALL ON SCHEMA hytch_push_vault FROM :"runtime_role";
+REVOKE ALL ON TABLE
+    hytch_push_vault.a10_accepted_keysets,
+    hytch_push_vault.a10_keyset_state,
+    hytch_push_vault.a10_registration_replays,
+    hytch_push_vault.a10_registration_bindings
+FROM :"runtime_role";
+REVOKE ALL ON FUNCTION
+    hytch_push_vault.reject_a10_immutable_mutation(),
+    hytch_push_vault.guard_a10_replay_delete()
+FROM :"runtime_role";
+
+GRANT USAGE ON SCHEMA hytch_push_vault TO :"runtime_role";
+GRANT INSERT
+    ON hytch_push_vault.a10_accepted_keysets
+    TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE
+    ON hytch_push_vault.a10_keyset_state
+    TO :"runtime_role";
+GRANT INSERT, DELETE
+    ON hytch_push_vault.a10_registration_replays
+    TO :"runtime_role";
+GRANT SELECT, INSERT
+    ON hytch_push_vault.a10_registration_bindings
+    TO :"runtime_role";
+
+WITH required(relation_name, privilege_name) AS (
+    VALUES
+        ('hytch_push_vault.a10_accepted_keysets', 'INSERT'),
+        ('hytch_push_vault.a10_keyset_state', 'SELECT'),
+        ('hytch_push_vault.a10_keyset_state', 'INSERT'),
+        ('hytch_push_vault.a10_keyset_state', 'UPDATE'),
+        ('hytch_push_vault.a10_registration_replays', 'INSERT'),
+        ('hytch_push_vault.a10_registration_replays', 'DELETE'),
+        ('hytch_push_vault.a10_registration_bindings', 'SELECT'),
+        ('hytch_push_vault.a10_registration_bindings', 'INSERT')
+), forbidden(relation_name, privilege_name) AS (
+    VALUES
+        ('hytch_push_vault.a10_accepted_keysets', 'SELECT'),
+        ('hytch_push_vault.a10_accepted_keysets', 'UPDATE'),
+        ('hytch_push_vault.a10_accepted_keysets', 'DELETE'),
+        ('hytch_push_vault.a10_accepted_keysets', 'TRUNCATE'),
+        ('hytch_push_vault.a10_accepted_keysets', 'REFERENCES'),
+        ('hytch_push_vault.a10_accepted_keysets', 'TRIGGER'),
+        ('hytch_push_vault.a10_keyset_state', 'DELETE'),
+        ('hytch_push_vault.a10_keyset_state', 'TRUNCATE'),
+        ('hytch_push_vault.a10_keyset_state', 'REFERENCES'),
+        ('hytch_push_vault.a10_keyset_state', 'TRIGGER'),
+        ('hytch_push_vault.a10_registration_replays', 'SELECT'),
+        ('hytch_push_vault.a10_registration_replays', 'UPDATE'),
+        ('hytch_push_vault.a10_registration_replays', 'TRUNCATE'),
+        ('hytch_push_vault.a10_registration_replays', 'REFERENCES'),
+        ('hytch_push_vault.a10_registration_replays', 'TRIGGER'),
+        ('hytch_push_vault.a10_registration_bindings', 'UPDATE'),
+        ('hytch_push_vault.a10_registration_bindings', 'DELETE'),
+        ('hytch_push_vault.a10_registration_bindings', 'TRUNCATE'),
+        ('hytch_push_vault.a10_registration_bindings', 'REFERENCES'),
+        ('hytch_push_vault.a10_registration_bindings', 'TRIGGER')
+)
+SELECT
+    pg_catalog.has_schema_privilege(
+        :'runtime_role', 'hytch_push_vault', 'USAGE'
+    ) AND NOT pg_catalog.has_schema_privilege(
+        :'runtime_role', 'hytch_push_vault', 'CREATE'
+    ) AND NOT pg_catalog.has_schema_privilege(
+        :'runtime_role',
+        'hytch_push_vault',
+        'USAGE WITH GRANT OPTION'
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM required
+         WHERE NOT pg_catalog.has_table_privilege(
+             :'runtime_role', relation_name, privilege_name
+         )
+            OR pg_catalog.has_table_privilege(
+                :'runtime_role',
+                relation_name,
+                privilege_name || ' WITH GRANT OPTION'
+            )
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM forbidden
+         WHERE pg_catalog.has_table_privilege(
+             :'runtime_role', relation_name, privilege_name
+         )
+    ) AND NOT pg_catalog.has_function_privilege(
+        :'runtime_role',
+        'hytch_push_vault.reject_a10_immutable_mutation()',
+        'EXECUTE'
+    ) AND NOT pg_catalog.has_function_privilege(
+        :'runtime_role',
+        'hytch_push_vault.guard_a10_replay_delete()',
+        'EXECUTE'
+    ) AS a10_runtime_acl_exact;
+
+-- Commit only when every returned column is true and the existing startup
+-- role/ownership/membership attestation also passes for this exact role.
+COMMIT;
+```
+
+The runtime needs `INSERT` on accepted keysets; `SELECT, INSERT, UPDATE` on
+the current keyset row; `INSERT, DELETE` on bounded replay receipts; and
+`SELECT, INSERT` on immutable installation-owner bindings. It receives no
+grant option, direct trigger-function execution, schema creation, table
+ownership, or mutation privilege beyond those exact operations. Existing
+least-privilege grants on the A9 and secure-vault tables remain separately
+required by the sink and are not broadened by this ceremony.
+
 ## Private incident-access contract
 
 The private listener is a distinct loopback-only HTTP server, not a route on
