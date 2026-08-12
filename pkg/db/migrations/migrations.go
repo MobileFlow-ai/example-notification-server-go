@@ -130,11 +130,7 @@ func RequireCurrent(ctx context.Context, db *sql.DB) error {
 	if err = db.QueryRowContext(
 		ctx,
 		`WITH migration_relation AS (
-		     SELECT relation.oid,
-		            relation.relkind,
-		            relation.relpersistence,
-		            relation.relrowsecurity,
-		            relation.relforcerowsecurity
+		     SELECT relation.*
 		       FROM pg_catalog.pg_class AS relation
 		       JOIN pg_catalog.pg_namespace AS namespace
 		         ON namespace.oid = relation.relnamespace
@@ -145,23 +141,36 @@ func RequireCurrent(ctx context.Context, db *sql.DB) error {
 		     SELECT
 		         relation.relkind = 'r' AND
 		         relation.relpersistence = 'p' AND
+		         NOT relation.relispartition AND
+		         NOT relation.relhassubclass AND
 		         NOT relation.relrowsecurity AND
 		         NOT relation.relforcerowsecurity AND
+		         NOT relation.relhastriggers AND
+		         NOT relation.relhasrules AND
 		         (
 		             SELECT pg_catalog.count(*) = 2 AND
 		                    COALESCE(pg_catalog.bool_and(
+		                        attribute.attnotnull AND
+		                        attribute.attidentity = '' AND
+		                        attribute.attgenerated = '' AND
+		                        NOT attribute.atthasdef AND
+		                        attribute.attacl IS NULL AND
+		                        attribute.attoptions IS NULL AND
+		                        attribute.attcollation = 0 AND
 		                        (
-		                            attribute.attname = 'version' AND
-		                            attribute.atttypid =
-		                                'pg_catalog.int8'
-		                                    ::pg_catalog.regtype AND
-		                            attribute.attnotnull
-		                        ) OR (
-		                            attribute.attname = 'dirty' AND
-		                            attribute.atttypid =
-		                                'pg_catalog.bool'
-		                                    ::pg_catalog.regtype AND
-		                            attribute.attnotnull
+		                            (
+		                                attribute.attnum = 1 AND
+		                                attribute.attname = 'version' AND
+		                                attribute.atttypid =
+		                                    'pg_catalog.int8'
+		                                        ::pg_catalog.regtype
+		                            ) OR (
+		                                attribute.attnum = 2 AND
+		                                attribute.attname = 'dirty' AND
+		                                attribute.atttypid =
+		                                    'pg_catalog.bool'
+		                                        ::pg_catalog.regtype
+		                            )
 		                        )
 		                    ), FALSE)
 		               FROM pg_catalog.pg_attribute AS attribute
@@ -170,19 +179,61 @@ func RequireCurrent(ctx context.Context, db *sql.DB) error {
 		                AND NOT attribute.attisdropped
 		         ) AND
 		         (
-		             SELECT pg_catalog.count(*) = 1
+		             SELECT (
+		                        (
+		                            pg_catalog.current_setting(
+		                                'server_version_num'
+		                            )::pg_catalog.int4 >= 130000 AND
+		                            pg_catalog.current_setting(
+		                                'server_version_num'
+		                            )::pg_catalog.int4 < 140000 AND
+		                            pg_catalog.count(*) = 1 AND
+		                            pg_catalog.count(*) FILTER (
+		                                WHERE constraint_record.contype = 'n'
+		                            ) = 0
+		                        ) OR (
+		                            pg_catalog.current_setting(
+		                                'server_version_num'
+		                            )::pg_catalog.int4 >= 180000 AND
+		                            pg_catalog.current_setting(
+		                                'server_version_num'
+		                            )::pg_catalog.int4 < 190000 AND
+		                            pg_catalog.count(*) = 3 AND
+		                            pg_catalog.count(*) FILTER (
+		                                WHERE constraint_record.contype = 'n'
+		                            ) = 2
+		                        )
+		                    ) AND
+		                    pg_catalog.count(*) FILTER (
+		                        WHERE constraint_record.contype <> 'n'
+		                    ) = 1 AND
+		                    pg_catalog.count(*) FILTER (
+		                        WHERE constraint_record.contype = 'p' AND
+		                              constraint_record.conkey = ARRAY[
+		                                  (
+		                                      SELECT attribute.attnum
+		                                        FROM pg_catalog.pg_attribute AS
+		                                             attribute
+		                                       WHERE attribute.attrelid = relation.oid
+		                                         AND attribute.attname = 'version'
+		                                         AND NOT attribute.attisdropped
+		                                  )
+		                              ]::pg_catalog.int2[]
+		                              AND constraint_record.convalidated
+		                              AND NOT constraint_record.condeferrable
+		                              AND NOT constraint_record.condeferred
+		                              AND constraint_record.conislocal
+		                              AND constraint_record.coninhcount = 0
+		                              AND constraint_record.connoinherit
+		                    ) = 1
 		               FROM pg_catalog.pg_constraint AS constraint_record
 		              WHERE constraint_record.conrelid = relation.oid
-		                AND constraint_record.contype = 'p'
-		                AND constraint_record.conkey = ARRAY[
-		                    (
-		                        SELECT attribute.attnum
-		                          FROM pg_catalog.pg_attribute AS attribute
-		                         WHERE attribute.attrelid = relation.oid
-		                           AND attribute.attname = 'version'
-		                           AND NOT attribute.attisdropped
-		                    )
-		                ]::pg_catalog.int2[]
+		         ) AND
+		         NOT EXISTS (
+		             SELECT 1
+		               FROM pg_catalog.pg_inherits AS inheritance
+		              WHERE inheritance.inhrelid = relation.oid OR
+		                    inheritance.inhparent = relation.oid
 		         ) AND
 		         NOT EXISTS (
 		             SELECT 1
@@ -198,7 +249,6 @@ func RequireCurrent(ctx context.Context, db *sql.DB) error {
 		             SELECT 1
 		               FROM pg_catalog.pg_trigger AS trigger
 		              WHERE trigger.tgrelid = relation.oid
-		                AND NOT trigger.tgisinternal
 		         )
 		       FROM migration_relation AS relation
 		 ), FALSE)`,

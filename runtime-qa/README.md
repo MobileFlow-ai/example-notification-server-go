@@ -2,7 +2,7 @@
 
 This harness builds the current bridge image, applies all embedded migrations
 to an isolated Postgres container, starts the API-only dormant runtime, checks
-exact health and Gate 6 outcomes, and runs an activated A10 assembly probe.
+exact health and Gate 6 outcomes, and runs activated A10 and A3 assembly probes.
 
 ## Ports
 
@@ -22,9 +22,10 @@ make runtime-qa
 
 `make runtime-qa-full` runs the same harness with
 `VAULT_INTEGRATION_TESTS=1`, adding the opt-in A9 CAS delivery/routing
-integration tests to the serial suite. The default target skips those tests,
-so a default green does not prove the A9 CAS layer; use the full target for
-any A9-related claim or merge gate.
+integration tests plus both the access-audit and A3 witness activation catalog
+barriers on PostgreSQL 13 and 18. The default target skips those matrix tests,
+so a default green does not prove the A9 CAS layer or the cross-version A3
+barrier; use the full target for any related claim or merge gate.
 
 Both targets run `TestActivatedA10ServerAssemblyRuntimeQA` against the isolated
 Postgres service. The probe turns on the exact A9, A10, APNS, secure-vault,
@@ -35,6 +36,14 @@ test keys. It deliberately does not construct APNS or XMTP clients, so the
 positive assembly check cannot create external egress or consume deployment
 secrets.
 
+They also run `TestActivatedA3ServerAssemblyRuntimeQA`. That probe uses
+in-process IdentityApi and ValidationApi seams, mounts both real A3 handlers on
+an ephemeral loopback ApiServer, provisions and enters a least-privilege
+database role, passes the production migration-00014 catalog/ACL barrier,
+rebuilds the runtime, and verifies an exact stored-receipt replay. It creates
+no external gRPC client and uses only synthetic canonical Base64url bearer/key
+material.
+
 Both targets always remove their containers and volume on exit. For
 interactive inspection, use `make runtime-qa-up` and finish with
 `make runtime-qa-down`.
@@ -44,13 +53,14 @@ interactive inspection, use `make runtime-qa-up` and finish with
 The harness verifies:
 
 - `/livez` returns `200 ok`;
-- `/readyz` returns `200 ok` after migration 00013 is applied;
+- `/readyz` returns `200 ok` after migration 00014 is applied;
 - `/health/xmtp` returns `503 xmtp_unavailable` because the QA bridge is
   intentionally API-only and does not activate an XMTP listener;
-- `schema_migrations` records version 13 with `dirty=false`;
+- `schema_migrations` records version 14 with `dirty=false`;
 - `APNS_ENABLED`, `BRIDGE_A9_ENABLED`,
-  `BRIDGE_A10_REGISTRATION_ENABLED`, and `BRIDGE_WELCOME_ENABLED` are all
-  exactly `false` inside the long-lived bridge container;
+  `BRIDGE_A10_REGISTRATION_ENABLED`, `BRIDGE_A3_ASSOCIATION_ENABLED`,
+  `BRIDGE_A3_WITNESS_ENABLED`, and `BRIDGE_WELCOME_ENABLED` are all exactly
+  `false` inside the long-lived bridge container;
 - the separate loopback-only A10 probe enables the full activation predicate,
   serves one successful registration through the assembled API, observes
   encrypted persistence, rebuilds the runtime, and rejects the same credential

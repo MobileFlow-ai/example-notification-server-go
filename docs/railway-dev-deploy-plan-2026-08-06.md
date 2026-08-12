@@ -65,8 +65,8 @@ Never print, copy, or log values. Set in the Railway service UI only.
 | `LOG_ENCODING` / `LOG_LEVEL` | `json` / `info` | literal |
 
 Forbidden in this service: `MIGRATION_DB_CONNECTION_STRING` (runtime startup
-fails if present), any `BRIDGE_A9_*`, any `APNS_*` credential, incident-access
-variables (separate, later, reviewed change).
+fails if present), any `BRIDGE_A9_*`, `BRIDGE_A3_*`, any `APNS_*` credential,
+and incident-access variables (separate, later, reviewed change).
 
 ## 4. Database and persistence
 
@@ -76,14 +76,14 @@ variables (separate, later, reviewed change).
 - Two credentials:
   - **owner/migration** credential — used only by a separate, private,
     manually-run migration job (`MIGRATION_DB_CONNECTION_STRING` there and
-    only there). Applies `pkg/db/migrations` through `00013` and the marker
+    only there). Applies `pkg/db/migrations` through `00014` and the marker
     contract, then is removed from any long-lived service.
   - **restricted runtime** role — `DB_CONNECTION_STRING` for the bridge
     service. Owns no schema/table/trigger/function, no `CREATE`, not a member
     of the owner, cannot execute the retirement function (runbook §Required
     Railway variables has the full posture; secure startup verifies and
     refuses on violations).
-- Schema acceptance: `schema_migrations` must read exactly `13|false` before
+- Schema acceptance: `schema_migrations` must read exactly `14|false` before
   first runtime start (the secure runtime verifies and never migrates).
 - Backups: Railway's default snapshot posture is acceptable for dev; the
   vault holds only encrypted route material and keyed lookups by design.
@@ -120,7 +120,7 @@ is recorded here by reference only:
    via the recorded merge order; the bridge repo is outside the
    `dev-batch-merge` cron, so these are manual merges after cross-agent
    review. Re-run `make runtime-qa` on the merge result and keep the log.
-2. Provision §4 (database, two roles, migration job run, `13|false`
+2. Provision §4 (database, two roles, migration job run, `14|false`
    verified read-only).
 3. Create the service per §1, set §3 variables in the Railway UI.
 4. Re-check the cost gate (§8) the same day.
@@ -143,7 +143,7 @@ BRIDGE_BASE_URL=https://<railway-service-host> ./scripts/railway_dev_smoke.sh
 
 It asserts the three health endpoints' exact status/body contract and, when
 `BRIDGE_SMOKE_DSN` (the restricted read-only role) is provided, that
-`schema_migrations` reads `13|false`. It never sends authenticated API
+`schema_migrations` reads `14|false`. It never sends authenticated API
 requests and carries no bearer token.
 
 ## 8. Cost gate

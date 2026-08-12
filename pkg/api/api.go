@@ -8,11 +8,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/xmtp/example-notification-server-go/pkg/a10registration"
+	"github.com/xmtp/example-notification-server-go/pkg/a3trust"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	privacylog "github.com/xmtp/example-notification-server-go/pkg/logging"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
@@ -40,6 +42,8 @@ type ApiServer struct {
 	xmtpReadyCheck            func() bool
 	secureRefresh             *registration.Handler
 	a10Registration           http.Handler
+	a3Association             http.Handler
+	a3Witness                 http.Handler
 	secureMode                bool
 	legacyMutationAPIDisabled bool
 	failureOnce               sync.Once
@@ -139,6 +143,22 @@ func (s *ApiServer) EnableA10Registration(handler http.Handler) error {
 	return nil
 }
 
+// EnableA3TrustSurfaces mounts only explicitly assembled A3 handlers on the
+// existing public API listener. A nil handler remains completely dark.
+func (s *ApiServer) EnableA3TrustSurfaces(
+	association http.Handler,
+	witness http.Handler,
+) error {
+	if s == nil || s.httpServer != nil ||
+		(association == nil && witness == nil) ||
+		s.a3Association != nil || s.a3Witness != nil {
+		return ErrAPIUnavailable
+	}
+	s.a3Association = association
+	s.a3Witness = witness
+	return nil
+}
+
 func (s *ApiServer) Start() error {
 	if s.httpServer != nil {
 		return nil
@@ -195,13 +215,55 @@ func (s *ApiServer) buildHTTPHandler() http.Handler {
 	if s.a10Registration != nil {
 		mux.Handle(a10registration.Path, s.a10Registration)
 	}
+	if s.a3Association != nil {
+		mux.Handle(a3trust.AssociationPath, s.a3Association)
+	}
+	if s.a3Witness != nil {
+		mux.Handle(a3trust.WitnessPath, s.a3Witness)
+	}
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/livez", s.handleLive)
 	mux.HandleFunc("/health/xmtp", s.handleXMTPHealth)
+	routed := http.Handler(mux)
+	if s.a3Association != nil || s.a3Witness != nil {
+		routed = exactA3TargetGuard(routed)
+	}
 	return privacySafeHTTPHandler(
 		s.logger,
-		h2c.NewHandler(mux, &http2.Server{}),
+		h2c.NewHandler(routed, &http2.Server{}),
 	)
+}
+
+func exactA3TargetGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if a3NamespaceTarget(request) &&
+			request.RequestURI != a3trust.AssociationPath &&
+			request.RequestURI != a3trust.WitnessPath {
+			writer.Header().Set("Cache-Control", "no-store")
+			writer.Header().Set("X-Content-Type-Options", "nosniff")
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(writer, `{"error":"unavailable"}`)
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+func a3NamespaceTarget(request *http.Request) bool {
+	if request == nil || request.URL == nil {
+		return false
+	}
+	for _, target := range []string{
+		request.URL.Path,
+		request.URL.RawPath,
+		request.URL.Opaque,
+	} {
+		if strings.Contains(target, "xmtp-directory") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ApiServer) signalFailure() {

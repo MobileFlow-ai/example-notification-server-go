@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xmtp/example-notification-server-go/mocks"
 	"github.com/xmtp/example-notification-server-go/pkg/a10registration"
+	"github.com/xmtp/example-notification-server-go/pkg/a3trust"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	proto "github.com/xmtp/example-notification-server-go/pkg/proto/notifications/v1"
@@ -919,6 +920,98 @@ func TestA10RegistrationRouteIsAbsentUnlessHookIsExplicitlyInstalled(t *testing.
 		httptest.NewRequest(http.MethodPut, a10registration.Path, strings.NewReader("{}")),
 	)
 	require.Equal(t, http.StatusNoContent, mounted.Code)
+}
+
+func TestA3TrustRoutesAreDarkUnlessExplicitlyMounted(t *testing.T) {
+	newServer := func() *ApiServer {
+		return NewApiServer(
+			testutils.TestLogger(t),
+			options.ApiOptions{},
+			mocks.NewInstallations(t),
+			mocks.NewSubscriptions(t),
+			interfaces.ListenerTypeV4,
+		)
+	}
+	for _, path := range []string{a3trust.AssociationPath, a3trust.WitnessPath} {
+		recorder := httptest.NewRecorder()
+		newServer().buildHTTPHandler().ServeHTTP(
+			recorder,
+			httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")),
+		)
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+	}
+
+	associationCalled := false
+	witnessCalled := false
+	server := newServer()
+	require.NoError(t, server.EnableA3TrustSurfaces(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			associationCalled = true
+			writer.WriteHeader(http.StatusNoContent)
+		}),
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			witnessCalled = true
+			writer.WriteHeader(http.StatusNoContent)
+		}),
+	))
+	require.ErrorIs(t, server.EnableA3TrustSurfaces(http.NotFoundHandler(), nil), ErrAPIUnavailable)
+	for _, path := range []string{a3trust.AssociationPath, a3trust.WitnessPath} {
+		recorder := httptest.NewRecorder()
+		server.buildHTTPHandler().ServeHTTP(
+			recorder,
+			httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")),
+		)
+		require.Equal(t, http.StatusNoContent, recorder.Code)
+	}
+	require.True(t, associationCalled)
+	require.True(t, witnessCalled)
+}
+
+func TestA3TrustAssemblyRejectsServeMuxCanonicalizationTargets(t *testing.T) {
+	server := NewApiServer(
+		testutils.TestLogger(t),
+		options.ApiOptions{},
+		mocks.NewInstallations(t),
+		mocks.NewSubscriptions(t),
+		interfaces.ListenerTypeV4,
+	)
+	called := false
+	require.NoError(t, server.EnableA3TrustSurfaces(http.HandlerFunc(
+		func(writer http.ResponseWriter, _ *http.Request) {
+			called = true
+			writer.WriteHeader(http.StatusNoContent)
+		},
+	), nil))
+	for name, target := range map[string]string{
+		"double slash":         "/internal//v1/xmtp-directory/installation-associations:read",
+		"double leading slash": "//internal/v1/xmtp-directory/installation-associations:read",
+		"dot segment":          "/internal/v1/xmtp-directory/../installation-associations:read",
+		"encoded":              "/internal/v1/%78mtp-directory/installation-associations:read",
+		"absolute form":        "http://example.invalid" + a3trust.AssociationPath,
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			server.buildHTTPHandler().ServeHTTP(
+				recorder,
+				httptest.NewRequest(http.MethodPost, target, strings.NewReader("{}")),
+			)
+			require.Equal(t, http.StatusUnauthorized, recorder.Code)
+			require.Empty(t, recorder.Header().Get("Location"))
+			require.JSONEq(t, `{"error":"unavailable"}`, recorder.Body.String())
+		})
+	}
+	require.False(t, called)
+
+	unrelated := httptest.NewRecorder()
+	server.buildHTTPHandler().ServeHTTP(
+		unrelated,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/livez?label=xmtp-directory",
+			nil,
+		),
+	)
+	require.Equal(t, http.StatusOK, unrelated.Code)
 }
 
 func (b *secureMountBackend) Refresh(
