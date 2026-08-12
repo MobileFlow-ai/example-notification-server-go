@@ -76,6 +76,21 @@ func TestLegacyRetirementPreflightModeIsMutuallyExclusive(t *testing.T) {
 		}(),
 		func() options.Options {
 			config := valid
+			config.A10.Enabled = true
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A3.AssociationEnabled = true
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A3.WitnessEnabled = true
+			return config
+		}(),
+		func() options.Options {
+			config := valid
 			config.Incident.Enabled = true
 			return config
 		}(),
@@ -117,6 +132,21 @@ func TestLegacyRetirementPreflightModeIsMutuallyExclusive(t *testing.T) {
 		func() options.Options {
 			config := valid
 			config.A9.TopicCommitmentKeysJSON = "runtime-secret"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A10.PinnedRootKeyID = "runtime-key-id"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A3.AssociationBearerToken = "runtime-secret"
+			return config
+		}(),
+		func() options.Options {
+			config := valid
+			config.A3.WitnessSeedFilePath = "/runtime-secret"
 			return config
 		}(),
 		func() options.Options {

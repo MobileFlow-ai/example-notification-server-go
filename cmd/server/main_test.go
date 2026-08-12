@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jessevdk/go-flags"
 	"github.com/stretchr/testify/require"
 	database "github.com/xmtp/example-notification-server-go/pkg/db"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
@@ -17,6 +18,17 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestServerOptionsRemainParseableWithA3Defaults(t *testing.T) {
+	var config options.Options
+	parser := flags.NewParser(
+		&config,
+		flags.HelpFlag|flags.PassDoubleDash,
+	)
+	remaining, err := parser.ParseArgs(nil)
+	require.NoError(t, err)
+	require.Empty(t, remaining)
+}
 
 func TestCheckedSecureLeaseTTLRejectsOverflowBeforeConversion(t *testing.T) {
 	for _, hours := range []int{-1, 0, maxSecureLeaseTTLHours + 1, math.MaxInt} {
@@ -110,6 +122,65 @@ func TestA10RuntimeConfigurationRejectsDisabledMaterialAndDowngrades(t *testing.
 			require.False(t, a10RuntimeConfigurationValid(candidate))
 		})
 	}
+}
+
+func TestA3RuntimeConfigurationIsDefaultDarkAndStrict(t *testing.T) {
+	require.True(t, a3RuntimeConfigurationValid(options.Options{}))
+	dormant := options.Options{}
+	dormant.A3.WitnessBearerToken = testA3OpaqueBearer(0x41)
+	require.False(t, a3RuntimeConfigurationValid(dormant))
+
+	association := options.Options{
+		Api:   options.ApiOptions{Enabled: true},
+		Vault: options.VaultOptions{Environment: "dev"},
+		A3: options.A3Options{
+			AssociationEnabled: true, AssociationBearerToken: testA3OpaqueBearer(0x31),
+			IdentityGRPCAddress:              "grpc.dev.xmtp.network:443",
+			ValidationGRPCAddress:            "127.0.0.1:50051",
+			ValidationAllowPlaintextLoopback: true,
+			AssociationRequestTimeoutSeconds: 10,
+			AssociationMaximumClockSkewSec:   30, AssociationMaxPages: 32,
+			AssociationMaxPageUpdates: 128, AssociationMaxUpdates: 256,
+			AssociationMaxUpdateBytes:     64 * 1024,
+			AssociationMaxHistoryBytes:    2 * 1024 * 1024,
+			AssociationMaxValidationBytes: 16 * 1024 * 1024,
+			AssociationMaxConcurrency:     8, AssociationRatePerSecond: 20,
+			AssociationRateBurst: 20,
+		},
+	}
+	require.True(t, a3RuntimeConfigurationValid(association))
+	lowEntropyBearer := association
+	lowEntropyBearer.A3.AssociationBearerToken = strings.Repeat("a", 48)
+	require.False(t, a3RuntimeConfigurationValid(lowEntropyBearer))
+	overBudgeted := association
+	overBudgeted.A3.AssociationMaxValidationBytes =
+		overBudgeted.A3.AssociationMaxHistoryBytes - 1
+	require.False(t, a3RuntimeConfigurationValid(overBudgeted))
+	nonLoopbackPlaintext := association
+	nonLoopbackPlaintext.A3.ValidationGRPCAddress = "validation.example:443"
+	require.False(t, a3RuntimeConfigurationValid(nonLoopbackPlaintext))
+	wrongNetwork := association
+	wrongNetwork.Vault.Environment = "production"
+	require.False(t, a3RuntimeConfigurationValid(wrongNetwork))
+	arbitraryIdentity := association
+	arbitraryIdentity.A3.IdentityGRPCAddress = "identity.example:443"
+	require.False(t, a3RuntimeConfigurationValid(arbitraryIdentity))
+
+	witness := options.Options{
+		Api:   options.ApiOptions{Enabled: true},
+		Vault: options.VaultOptions{Environment: "dev"},
+		A3: options.A3Options{
+			WitnessEnabled: true, WitnessBearerToken: testA3OpaqueBearer(0x41),
+			WitnessSeedFilePath:            "/run/secrets/a3-witness-seed",
+			WitnessSequencerPublicKeysJSON: `{"ed25519-sha256:` + strings.Repeat("1", 64) + `":"value"}`,
+			WitnessRequestTimeoutSeconds:   10, WitnessMaximumAgeSeconds: 300,
+			WitnessMaximumClockSkewSec: 30, WitnessMaxConcurrency: 8,
+			WitnessRatePerSecond: 20, WitnessRateBurst: 20,
+		},
+	}
+	require.True(t, a3RuntimeConfigurationValid(witness))
+	witness.Api.Enabled = false
+	require.False(t, a3RuntimeConfigurationValid(witness))
 }
 
 func TestA9RuntimeConfigurationRejectsDisabledMaterialAndDowngrades(

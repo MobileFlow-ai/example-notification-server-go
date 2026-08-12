@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/xmtp/example-notification-server-go/pkg/a3trust"
 	"github.com/xmtp/example-notification-server-go/pkg/a9api"
 	"github.com/xmtp/example-notification-server-go/pkg/api"
 	"github.com/xmtp/example-notification-server-go/pkg/authority"
@@ -162,6 +164,9 @@ func runServer() {
 	if !a10RuntimeConfigurationValid(opts) {
 		logger.Fatal("A10 registration configuration invalid")
 	}
+	if !a3RuntimeConfigurationValid(opts) {
+		logger.Fatal("A3 directory trust configuration invalid")
+	}
 	if opts.MigrationDbConnectionString != "" {
 		logger.Fatal("migration credential present in runtime")
 	}
@@ -215,6 +220,7 @@ func runServer() {
 	var a9TrustHandle *vault.A9TrustHandle
 	var a9ControlRuntime *a9Runtime
 	var a10RegistrationRuntime *a10Runtime
+	var a3TrustRuntime *a3Runtime
 	if opts.Vault.Enabled {
 		var parseErr error
 		encryptionKeys, parseErr = vault.ParseKeyring(opts.Vault.MasterKeysJSON)
@@ -319,6 +325,17 @@ func runServer() {
 		)
 		if err != nil {
 			logger.Fatal("A10 registration initialization failed")
+		}
+	}
+	if opts.A3.AssociationEnabled || opts.A3.WitnessEnabled {
+		a3TrustRuntime, err = initializeA3Runtime(
+			ctx,
+			opts.A3,
+			opts.Vault.Environment,
+			db,
+		)
+		if err != nil {
+			logger.Fatal("A3 directory trust initialization failed")
 		}
 	}
 	var notifListener xmtp.NotificationListener
@@ -440,6 +457,22 @@ func runServer() {
 			a10RegistrationRuntime,
 		); err != nil {
 			logger.Fatal("failed to enable A10 registration")
+		}
+		if a3TrustRuntime != nil {
+			var associationHandler http.Handler
+			var witnessHandler http.Handler
+			if a3TrustRuntime.association != nil {
+				associationHandler = a3TrustRuntime.association
+			}
+			if a3TrustRuntime.witness != nil {
+				witnessHandler = a3TrustRuntime.witness
+			}
+			if err = apiServer.EnableA3TrustSurfaces(
+				associationHandler,
+				witnessHandler,
+			); err != nil {
+				logger.Fatal("failed to enable A3 directory trust")
+			}
 		}
 		if notifListener != nil {
 			apiServer.SetXMTPReadyCheck(notifListener.Ready)
@@ -704,6 +737,12 @@ func runServer() {
 		}
 		shutdownCancel()
 	}
+	if a3TrustRuntime != nil {
+		if err = a3TrustRuntime.Close(); err != nil {
+			logger.Error("A3 directory trust shutdown incomplete")
+			runtimeFailed = true
+		}
+	}
 	if runtimeFailed {
 		panic("runtime control failed")
 	}
@@ -774,6 +813,78 @@ func a10RuntimeConfigurationValid(config options.Options) bool {
 		config.A10.KeysetRequestTimeoutSeconds >= 1 &&
 		config.A10.KeysetRequestTimeoutSeconds <=
 			maxA9KeysetRequestTimeoutSeconds
+}
+
+func a3RuntimeConfigurationValid(config options.Options) bool {
+	associationMaterial := config.A3.AssociationBearerToken != "" ||
+		config.A3.IdentityGRPCAddress != "" ||
+		config.A3.ValidationGRPCAddress != "" ||
+		config.A3.ValidationAllowPlaintextLoopback
+	witnessMaterial := config.A3.WitnessBearerToken != "" ||
+		config.A3.WitnessSeedFilePath != "" ||
+		config.A3.WitnessSequencerPublicKeysJSON != ""
+	if !config.A3.AssociationEnabled && !config.A3.WitnessEnabled {
+		return !associationMaterial && !witnessMaterial
+	}
+	if !config.Api.Enabled ||
+		(config.Vault.Environment != "dev" && config.Vault.Environment != "production") ||
+		(config.Vault.APIBearerToken != "" &&
+			(config.A3.AssociationBearerToken == config.Vault.APIBearerToken ||
+				config.A3.WitnessBearerToken == config.Vault.APIBearerToken)) ||
+		(!config.A3.AssociationEnabled && associationMaterial) ||
+		(!config.A3.WitnessEnabled && witnessMaterial) {
+		return false
+	}
+	if config.A3.AssociationEnabled {
+		if !validA3OpaqueBearer(config.A3.AssociationBearerToken) ||
+			!validA3IdentityTarget(
+				config.Vault.Environment,
+				config.A3.IdentityGRPCAddress,
+			) ||
+			!validA3GRPCTarget(
+				config.A3.ValidationGRPCAddress,
+				!config.A3.ValidationAllowPlaintextLoopback,
+			) ||
+			config.A3.AssociationRequestTimeoutSeconds < 1 ||
+			config.A3.AssociationRequestTimeoutSeconds > 30 ||
+			config.A3.AssociationMaximumClockSkewSec < 0 ||
+			config.A3.AssociationMaximumClockSkewSec > 3600 ||
+			config.A3.AssociationMaxPages < 1 || config.A3.AssociationMaxPages > 128 ||
+			config.A3.AssociationMaxPageUpdates < 1 || config.A3.AssociationMaxPageUpdates > 1024 ||
+			config.A3.AssociationMaxPageUpdates > config.A3.AssociationMaxUpdates ||
+			config.A3.AssociationMaxUpdates < 1 || config.A3.AssociationMaxUpdates > 1024 ||
+			config.A3.AssociationMaxUpdateBytes < 256 ||
+			config.A3.AssociationMaxUpdateBytes > 1024*1024 ||
+			config.A3.AssociationMaxHistoryBytes < config.A3.AssociationMaxUpdateBytes ||
+			config.A3.AssociationMaxHistoryBytes > 16*1024*1024 ||
+			config.A3.AssociationMaxValidationBytes < config.A3.AssociationMaxHistoryBytes ||
+			config.A3.AssociationMaxValidationBytes > 128*1024*1024 ||
+			config.A3.AssociationMaxConcurrency < 1 || config.A3.AssociationMaxConcurrency > 64 ||
+			config.A3.AssociationRatePerSecond < 1 || config.A3.AssociationRatePerSecond > 1000 ||
+			config.A3.AssociationRateBurst < 1 || config.A3.AssociationRateBurst > 1000 {
+			return false
+		}
+	}
+	if config.A3.WitnessEnabled {
+		if !validA3OpaqueBearer(config.A3.WitnessBearerToken) ||
+			!filepath.IsAbs(config.A3.WitnessSeedFilePath) ||
+			config.A3.WitnessSequencerPublicKeysJSON == "" ||
+			config.A3.WitnessRequestTimeoutSeconds < 1 ||
+			config.A3.WitnessRequestTimeoutSeconds > 30 ||
+			config.A3.WitnessMaximumAgeSeconds < 1 || config.A3.WitnessMaximumAgeSeconds > 86400 ||
+			config.A3.WitnessMaximumClockSkewSec < 0 || config.A3.WitnessMaximumClockSkewSec > 3600 ||
+			config.A3.WitnessMaxConcurrency < 1 || config.A3.WitnessMaxConcurrency > 64 ||
+			config.A3.WitnessRatePerSecond < 1 || config.A3.WitnessRatePerSecond > 1000 ||
+			config.A3.WitnessRateBurst < 1 || config.A3.WitnessRateBurst > 1000 {
+			return false
+		}
+	}
+	return !config.A3.AssociationEnabled || !config.A3.WitnessEnabled ||
+		config.A3.AssociationBearerToken != config.A3.WitnessBearerToken
+}
+
+func validA3OpaqueBearer(value string) bool {
+	return a3trust.ValidOpaqueBearer(value)
 }
 
 func a9RuntimeConfigurationValid(config options.Options) bool {
@@ -983,7 +1094,7 @@ func initDb() *sql.DB {
 	if err = prepareRuntimeDatabase(
 		context.Background(),
 		db,
-		opts.Vault.Enabled,
+		opts.Vault.Enabled || opts.A3.WitnessEnabled,
 	); err != nil {
 		if opts.Vault.Enabled {
 			log.Fatal("database schema gate failed")
@@ -1035,6 +1146,9 @@ func legacyRetirementPreflightModeValid(config options.Options) bool {
 		!config.HttpDelivery.Enabled &&
 		!config.Vault.Enabled &&
 		!config.A9.Enabled &&
+		!config.A10.Enabled &&
+		!config.A3.AssociationEnabled &&
+		!config.A3.WitnessEnabled &&
 		!config.Incident.Enabled &&
 		!legacyRetirementPreflightRuntimeCredentialPresent(config)
 }
@@ -1139,6 +1253,8 @@ func legacyRetirementPreflightRuntimeCredentialPresent(
 		config.Vault.AuthorityPublicKeysJSON != "" ||
 		config.Vault.APIBearerToken != "" ||
 		config.A9.HasTrustMaterial() ||
+		config.A10.HasTrustMaterial() ||
+		config.A3.HasTrustMaterial() ||
 		config.Incident.ActorCredentialsJSON != "" ||
 		config.Incident.OversightWebhookURL != "" ||
 		config.Incident.OversightWebhookBearer != ""

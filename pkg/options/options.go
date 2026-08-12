@@ -88,6 +88,42 @@ type A10Options struct {
 	KeysetRequestTimeoutSeconds  int    `long:"a10-keyset-request-timeout-seconds" env:"BRIDGE_A10_KEYSET_REQUEST_TIMEOUT_SECONDS" default:"10" description:"A10 keyset discovery timeout, from 1 through 30 seconds"`
 }
 
+type A3Options struct {
+	AssociationEnabled               bool   `long:"a3-association-enabled" env:"BRIDGE_A3_ASSOCIATION_ENABLED" description:"Enable the internal XMTP installation-association reader on the public API listener"`
+	AssociationBearerToken           string `long:"a3-association-bearer-token" env:"BRIDGE_A3_ASSOCIATION_BEARER_TOKEN" description:"Dedicated canonical unpadded Base64url bearer carrying 32 through 64 CSPRNG bytes"`
+	IdentityGRPCAddress              string `long:"a3-identity-grpc-address" env:"BRIDGE_A3_IDENTITY_GRPC_ADDRESS" description:"Environment-pinned XMTP IdentityApi host and port; DEV requires grpc.dev.xmtp.network:443"`
+	ValidationGRPCAddress            string `long:"a3-validation-grpc-address" env:"BRIDGE_A3_VALIDATION_GRPC_ADDRESS" description:"XMTP MLS ValidationApi host and port"`
+	ValidationAllowPlaintextLoopback bool   `long:"a3-validation-allow-plaintext-loopback" env:"BRIDGE_A3_VALIDATION_ALLOW_PLAINTEXT_LOOPBACK" description:"Permit plaintext only for a numeric loopback ValidationApi target in disposable QA; TLS is otherwise mandatory"`
+	AssociationRequestTimeoutSeconds int    `long:"a3-association-request-timeout-seconds" env:"BRIDGE_A3_ASSOCIATION_REQUEST_TIMEOUT_SECONDS" default:"10" description:"Association read deadline, from 1 through 30 seconds"`
+	AssociationMaximumClockSkewSec   int    `long:"a3-association-maximum-clock-skew-seconds" env:"BRIDGE_A3_ASSOCIATION_MAXIMUM_CLOCK_SKEW_SECONDS" default:"30" description:"Maximum future clock skew for IdentityApi observations"`
+	AssociationMaxPages              int    `long:"a3-association-max-pages" env:"BRIDGE_A3_ASSOCIATION_MAX_PAGES" default:"32" description:"Maximum IdentityApi pagination rounds"`
+	AssociationMaxPageUpdates        int    `long:"a3-association-max-page-updates" env:"BRIDGE_A3_ASSOCIATION_MAX_PAGE_UPDATES" default:"128" description:"Maximum updates accepted in one IdentityApi response"`
+	AssociationMaxUpdates            int    `long:"a3-association-max-updates" env:"BRIDGE_A3_ASSOCIATION_MAX_UPDATES" default:"256" description:"Maximum complete identity history length"`
+	AssociationMaxUpdateBytes        int    `long:"a3-association-max-update-bytes" env:"BRIDGE_A3_ASSOCIATION_MAX_UPDATE_BYTES" default:"65536" description:"Maximum deterministic protobuf bytes in one identity update"`
+	AssociationMaxHistoryBytes       int    `long:"a3-association-max-history-bytes" env:"BRIDGE_A3_ASSOCIATION_MAX_HISTORY_BYTES" default:"2097152" description:"Maximum deterministic protobuf bytes retained for complete identity history"`
+	AssociationMaxValidationBytes    int    `long:"a3-association-max-validation-bytes" env:"BRIDGE_A3_ASSOCIATION_MAX_VALIDATION_BYTES" default:"16777216" description:"Maximum cumulative deterministic protobuf bytes submitted for incremental validation"`
+	AssociationMaxConcurrency        int    `long:"a3-association-max-concurrency" env:"BRIDGE_A3_ASSOCIATION_MAX_CONCURRENCY" default:"8" description:"Maximum concurrent association reads"`
+	AssociationRatePerSecond         int    `long:"a3-association-rate-per-second" env:"BRIDGE_A3_ASSOCIATION_RATE_PER_SECOND" default:"20" description:"Association read process-local token rate"`
+	AssociationRateBurst             int    `long:"a3-association-rate-burst" env:"BRIDGE_A3_ASSOCIATION_RATE_BURST" default:"20" description:"Association read process-local token burst"`
+	WitnessEnabled                   bool   `long:"a3-witness-enabled" env:"BRIDGE_A3_WITNESS_ENABLED" description:"Enable the internal independent tree-head witness on the public API listener"`
+	WitnessBearerToken               string `long:"a3-witness-bearer-token" env:"BRIDGE_A3_WITNESS_BEARER_TOKEN" description:"Dedicated canonical unpadded Base64url bearer carrying 32 through 64 CSPRNG bytes"`
+	WitnessSeedFilePath              string `long:"a3-witness-seed-file-path" env:"BRIDGE_A3_WITNESS_SEED_FILE_PATH" description:"Absolute restricted stable regular file containing the dedicated 32-byte Ed25519 witness seed"`
+	WitnessSequencerPublicKeysJSON   string `long:"a3-witness-sequencer-public-keys-json" env:"BRIDGE_A3_WITNESS_SEQUENCER_PUBLIC_KEYS_JSON" description:"JSON object mapping allowed sequencer key IDs to canonical Base64 Ed25519 public keys"`
+	WitnessRequestTimeoutSeconds     int    `long:"a3-witness-request-timeout-seconds" env:"BRIDGE_A3_WITNESS_REQUEST_TIMEOUT_SECONDS" default:"10" description:"Witness proposal deadline, from 1 through 30 seconds"`
+	WitnessMaximumAgeSeconds         int    `long:"a3-witness-maximum-age-seconds" env:"BRIDGE_A3_WITNESS_MAXIMUM_AGE_SECONDS" default:"300" description:"Maximum accepted tree-head age"`
+	WitnessMaximumClockSkewSec       int    `long:"a3-witness-maximum-clock-skew-seconds" env:"BRIDGE_A3_WITNESS_MAXIMUM_CLOCK_SKEW_SECONDS" default:"30" description:"Maximum future tree-head clock skew"`
+	WitnessMaxConcurrency            int    `long:"a3-witness-max-concurrency" env:"BRIDGE_A3_WITNESS_MAX_CONCURRENCY" default:"8" description:"Maximum concurrent witness proposals"`
+	WitnessRatePerSecond             int    `long:"a3-witness-rate-per-second" env:"BRIDGE_A3_WITNESS_RATE_PER_SECOND" default:"20" description:"Witness proposal process-local token rate"`
+	WitnessRateBurst                 int    `long:"a3-witness-rate-burst" env:"BRIDGE_A3_WITNESS_RATE_BURST" default:"20" description:"Witness proposal process-local token burst"`
+}
+
+func (options A3Options) HasTrustMaterial() bool {
+	return options.AssociationBearerToken != "" || options.IdentityGRPCAddress != "" ||
+		options.ValidationGRPCAddress != "" ||
+		options.ValidationAllowPlaintextLoopback || options.WitnessBearerToken != "" ||
+		options.WitnessSeedFilePath != "" || options.WitnessSequencerPublicKeysJSON != ""
+}
+
 // HasTrustMaterial excludes the bounded nonzero timeout because it has a
 // default. Every other A10 value is dormant security material when disabled.
 func (options A10Options) HasTrustMaterial() bool {
@@ -129,6 +165,7 @@ type Options struct {
 	Vault        VaultOptions          `group:"Hytch Secure Vault Options"`
 	A9           A9Options             `group:"Hytch A9 Authority Options"`
 	A10          A10Options            `group:"Hytch A10 Registration Options"`
+	A3           A3Options             `group:"Hytch A3 Directory Trust Options"`
 	Incident     IncidentAccessOptions `group:"Incident Access Options"`
 
 	DbConnectionString          string `short:"d" long:"db-connection-string" env:"DB_CONNECTION_STRING" description:"Address to database"`

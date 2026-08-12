@@ -45,7 +45,7 @@ func TestLegacyRetirementHardeningMigratesExistingVersionTen(
 		t.Context(),
 		`SELECT version, dirty FROM public.schema_migrations`,
 	).Scan(&version, &dirty))
-	require.Equal(t, 13, version)
+	require.Equal(t, 14, version)
 	require.False(t, dirty)
 }
 

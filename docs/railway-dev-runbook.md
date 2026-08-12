@@ -4,7 +4,7 @@
 
 The dedicated local runtime-QA harness is now confirmed at its narrow scope:
 the bridge image built and ran on loopback ports 15432/18080, migration
-`13|false`, health probes, the serial Go suite, and the payload-free Gate-6
+`14|false`, health probes, the serial Go suite, and the payload-free Gate-6
 policy verifier passed. This corrects the prior blanket statement that all
 local runtime QA was unconfirmed.
 
@@ -366,7 +366,7 @@ trust-manager shutdown is a runtime failure. None of this dormant wiring
 authorizes migration activation, deployment, APNS, Welcome, or E2E claims;
 local QA remains **UNCONFIRMED**.
 
-## Dormant A10 authenticated registration source
+## Default-off A10 authenticated registration source
 
 Migration 13 and the dormant A10 adapters provide a separate root-pinned
 keyset high-water mark, one-use registration replay receipts, an append-only
@@ -377,14 +377,11 @@ authority, create a route, extend a lease, repair uncertainty, or change a
 subscription. A token change invalidates queued delivery-job safety before the
 new ciphertext is committed.
 
-The A10 public route is still not mounted by `cmd/server/main.go`, and the APNS
-startup hard-close remains in place. The checked-in Railway configuration
-keeps `BRIDGE_A10_REGISTRATION_ENABLED=false` and `APNS_ENABLED=false`. The
-dormant assembly code is not an activation path: a later separately authorized
-and exact-head-reviewed change must define and test the complete startup
-prerequisite set before it may mount the route or remove the APNS hard-close.
-No migration, Railway variable, root ceremony, APNS credential, deployment,
-or provider call is authorized by this source.
+The A10 public route is mounted only when the explicit A10 flag and every
+secure-vault, A9, V4-listener, API, APNS-development, keyset, and topic
+predicate passes. It remains absent by default. No migration, Railway
+variable, root ceremony, APNS credential, deployment, or provider call is
+authorized by this source.
 
 ### Migration 13 restricted-runtime grant ceremony
 
@@ -394,7 +391,7 @@ the owner is not sufficient to activate A10: the restricted runtime credential
 cannot use the four new tables until an operator performs this separate grant
 ceremony. Perform it only in the private migration job, with every bridge
 replica stopped, after independently verifying the dedicated dev database,
-clean `13|false` schema state, exact candidate image, and exact runtime role.
+clean `14|false` schema state, exact candidate image, and exact runtime role.
 It does not authorize mounting A10 or enabling APNS.
 
 In an owner `psql` session, set `runtime_role` to the already-created exact
@@ -514,6 +511,23 @@ grant option, direct trigger-function execution, schema creation, table
 ownership, or mutation privilege beyond those exact operations. Existing
 least-privilege grants on the A9 and secure-vault tables remain separately
 required by the sink and are not broadened by this ceremony.
+
+## Default-off A3 directory trust surfaces
+
+Migration 00014 and the fixed association-reader and independent-witness
+routes remain dark unless their individual A3 enable flags and complete
+configuration pass. Their wire semantics, canonical association digest,
+sequencer-authenticated witness proposal, canonical Base64url CSPRNG bearer
+posture, DEV-pinned IdentityApi endpoint, restricted seed-file posture, and
+the separate exact runtime-role grant ceremony are pinned in
+[`xmtp-a3-directory-trust-contract-2026-08.md`](xmtp-a3-directory-trust-contract-2026-08.md).
+Witness activation additionally requires the bridge's read-only catalog/ACL
+barrier to prove the migration-00014 table, mutation function, three always-on
+triggers, owner separation, schema-migration read-only grant, and exact
+`SELECT, INSERT` witness-table role. Owner or migration credentials fail this
+gate even when schema version is current.
+That source contract does not authorize running the ceremony, setting Railway
+variables, applying migration 00014, or deploying either route.
 
 ## Private incident-access contract
 

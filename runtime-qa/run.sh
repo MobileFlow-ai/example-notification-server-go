@@ -62,6 +62,8 @@ compose exec -T bridge sh -eu -c '
   test "$APNS_ENABLED" = false
   test "$BRIDGE_A9_ENABLED" = false
   test "$BRIDGE_A10_REGISTRATION_ENABLED" = false
+  test "$BRIDGE_A3_ASSOCIATION_ENABLED" = false
+  test "$BRIDGE_A3_WITNESS_ENABLED" = false
   test "$BRIDGE_WELCOME_ENABLED" = false
 '
 
@@ -81,11 +83,25 @@ A10_RUNTIME_QA=1 \
     ./cmd/server \
     -run '^TestActivatedA10ServerAssemblyRuntimeQA$'
 
+# This separately activates both A3 public handlers with injected in-process
+# IdentityApi/ValidationApi seams, crosses the real ApiServer assembly and
+# PostgreSQL witness store, then rebuilds the runtime to prove exact replay.
+# No external client is constructed and all credentials are synthetic.
+A3_RUNTIME_QA=1 \
+  BRIDGE_TEST_DSN="$runtime_qa_dsn" \
+  go test \
+    -buildvcs=false \
+    -mod=readonly \
+    -p 1 \
+    -count=1 \
+    ./cmd/server \
+    -run '^TestActivatedA3ServerAssemblyRuntimeQA$'
+
 # RUNTIME_QA_INCLUDE_OPT_IN=1 additionally runs the VAULT_INTEGRATION_TESTS
-# surface (the A9 CAS delivery/routing integration tests) and the access-audit
-# catalog barrier against both supported PostgreSQL catalog families. The
-# default run skips those tests, so a default green does not prove either
-# opt-in surface.
+# surface (the A9 CAS delivery/routing integration tests), the access-audit
+# catalog barrier, and the A3 witness activation barrier against both supported
+# PostgreSQL catalog families. The default run skips those matrix tests, so a
+# default green does not prove either opt-in surface.
 
 BRIDGE_TEST_DSN="$runtime_qa_dsn" \
   VAULT_INTEGRATION_TESTS="$opt_in_vault_integration" \
@@ -108,6 +124,15 @@ if [ -n "$opt_in_vault_integration" ]; then
         -count=1 \
         ./pkg/vault \
         -run '^TestAccessAuditBarrier'
+    printf 'A3 witness barrier matrix: %s\n' "$matrix_name"
+    BRIDGE_TEST_DSN="$matrix_dsn" \
+      go test \
+        -buildvcs=false \
+        -mod=readonly \
+        -p 1 \
+        -count=1 \
+        ./pkg/db \
+        -run '^TestA3WitnessActivationBarrier'
   done
 fi
 
@@ -118,7 +143,7 @@ cmp runtime-qa/expected/gate6.jsonl "$vector_result_file"
 
 compose ps
 if [ -n "$opt_in_vault_integration" ]; then
-  printf '%s\n' 'runtime QA passed (with opt-in vault integration): postgres=15432 bridge=18080 a10-assembly=activated-local welcome=false'
+    printf '%s\n' 'runtime QA passed (with opt-in vault integration): postgres=15432 bridge=18080 a10-assembly=activated-local a3-assembly=activated-local long-lived-a3=dark welcome=false'
 else
-  printf '%s\n' 'runtime QA passed: postgres=15432 bridge=18080 a10-assembly=activated-local welcome=false'
+  printf '%s\n' 'runtime QA passed: postgres=15432 bridge=18080 a10-assembly=activated-local a3-assembly=activated-local long-lived-a3=dark welcome=false'
 fi

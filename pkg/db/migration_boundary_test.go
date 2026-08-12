@@ -270,6 +270,32 @@ func TestRequireCurrentSchemaRequiresExactBookkeepingRelation(
 						public.schema_migrations_user_trigger()
 			`,
 		},
+		{
+			name: "inheritance parent",
+			statements: `
+				CREATE TABLE public.schema_migrations_parent (
+					version BIGINT,
+					dirty BOOLEAN
+				);
+				ALTER TABLE public.schema_migrations
+					INHERIT public.schema_migrations_parent
+			`,
+		},
+		{
+			name: "foreign key internal triggers",
+			statements: `
+				CREATE TABLE public.schema_migrations_parent (
+					version BIGINT PRIMARY KEY
+				);
+				INSERT INTO public.schema_migrations_parent (version)
+					SELECT version FROM public.schema_migrations;
+				ALTER TABLE public.schema_migrations
+					ADD CONSTRAINT schema_migrations_parent_fkey
+					FOREIGN KEY (version)
+					REFERENCES public.schema_migrations_parent(version)
+					ON DELETE CASCADE
+			`,
+		},
 	}
 
 	for _, test := range tests {
