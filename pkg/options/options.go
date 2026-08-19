@@ -175,6 +175,8 @@ type Options struct {
 	CreateMigration             string `long:"create-migration" description:"create a migration with the given name"`
 	MigrateOnly                 bool   `long:"migrate-only" description:"Apply database migrations and exit without starting runtime surfaces"`
 	PreflightLegacyRetirement   bool   `long:"preflight-legacy-retirement" description:"Run the read-only legacy routing retirement preflight and exit"`
+	ProvisionA9Material         string `long:"provision-a9-material" choice:"topic-commitment-keys" choice:"tls-certificate" choice:"tls-private-key" description:"Read one A9 material item from stdin, create its configured file at mode 0600, and exit"`
+	PreflightA9RuntimeFiles     bool   `long:"preflight-a9-runtime-files" description:"Validate the complete A9 runtime configuration and restricted file metadata without reading file contents, then exit"`
 }
 
 // APNSModeForBridgeEnvironment keeps the signed/wrapper environment vocabulary

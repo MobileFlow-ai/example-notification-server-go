@@ -15,6 +15,7 @@ require (
 	github.com/xmtp/xmtpd v1.3.1-0.20260402033823-6ae509c61de3
 	go.uber.org/zap v1.27.1
 	golang.org/x/net v0.52.0
+	golang.org/x/sys v0.42.0
 	google.golang.org/api v0.231.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
@@ -91,7 +92,6 @@ require (
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/appengine/v2 v2.0.6 // indirect

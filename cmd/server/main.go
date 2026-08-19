@@ -59,7 +59,18 @@ const (
 )
 
 func main() {
-	preflightRequested := legacyRetirementPreflightRequested(os.Args[1:])
+	args := os.Args[1:]
+	preflightRequested := legacyRetirementPreflightRequested(args)
+	a9MaterialRequested := a9MaterialModeRequested(args)
+	if a9MaterialRequested {
+		if !runWithA9MaterialPanicBoundary(
+			runServer,
+			os.Stderr,
+		) {
+			os.Exit(1)
+		}
+		return
+	}
 	if !runWithModeAwareFixedPanicBoundary(
 		runServer,
 		preflightRequested,
@@ -67,6 +78,20 @@ func main() {
 	) {
 		os.Exit(1)
 	}
+}
+
+func runWithA9MaterialPanicBoundary(
+	run func(),
+	stderr io.Writer,
+) (completed bool) {
+	defer func() {
+		if recover() != nil {
+			writeA9MaterialFailure(stderr)
+			completed = false
+		}
+	}()
+	run()
+	return true
 }
 
 func runWithFixedPanicBoundary(run func()) (completed bool) {
@@ -96,6 +121,17 @@ func runServer() {
 	log.SetFlags(0)
 	args := os.Args[1:]
 	preflightRequested := legacyRetirementPreflightRequested(args)
+	a9MaterialRequested := a9MaterialModeRequested(args)
+	if preflightRequested && a9MaterialRequested {
+		writeA9MaterialFailure(os.Stderr)
+		os.Exit(1)
+	}
+	if a9MaterialRequested {
+		if _, completionRequested := os.LookupEnv("GO_FLAGS_COMPLETION"); completionRequested {
+			writeA9MaterialFailure(os.Stderr)
+			os.Exit(1)
+		}
+	}
 	if preflightRequested &&
 		legacyRetirementPreflightMigrationDSNOnCLI(args) {
 		writeLegacyRetirementPreflightFailure(os.Stderr)
@@ -107,7 +143,12 @@ func runServer() {
 		&opts,
 		flags.HelpFlag|flags.PassDoubleDash,
 	)
-	if _, err = parser.ParseArgs(args); err != nil {
+	remaining, err := parser.ParseArgs(args)
+	if err != nil {
+		if a9MaterialRequested {
+			writeA9MaterialFailure(os.Stderr)
+			os.Exit(1)
+		}
 		if preflightRequested {
 			writeLegacyRetirementPreflightFailure(os.Stderr)
 			os.Exit(1)
@@ -116,6 +157,23 @@ func runServer() {
 			log.Fatal("option parsing failed")
 		}
 		parser.WriteHelp(os.Stdout)
+		return
+	}
+
+	if a9MaterialRequested {
+		if len(remaining) != 0 {
+			writeA9MaterialFailure(os.Stderr)
+			os.Exit(1)
+		}
+		completed := runA9MaterialMode(
+			opts,
+			os.Stdin,
+			os.Stdout,
+			os.Stderr,
+		)
+		if !completed {
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -899,6 +957,7 @@ func a9RuntimeConfigurationValid(config options.Options) bool {
 		config.A9.KeysetOrigin == "" ||
 		config.A9.PinnedRootPublicKeyBase64URL == "" ||
 		config.A9.PinnedRootKeyID == "" ||
+		!railwayA9RuntimePathsValid(config.A9) ||
 		config.A9.TopicCommitmentKeysJSON != "" ||
 		config.A9.TopicCommitmentKeysFilePath == "" ||
 		!filepath.IsAbs(config.A9.TopicCommitmentKeysFilePath) ||
