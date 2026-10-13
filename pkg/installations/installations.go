@@ -91,9 +91,10 @@ func (s DefaultInstallationService) GetInstallations(
 		out = append(out, interfaces.Installation{
 			Id: result.InstallationID,
 			DeliveryMechanism: interfaces.DeliveryMechanism{
-				Kind:      interfaces.DeliveryMechanismKind(result.Kind),
-				Token:     result.Token,
-				UpdatedAt: result.UpdatedAt,
+				Kind:                interfaces.DeliveryMechanismKind(result.Kind),
+				Token:               result.Token,
+				UpdatedAt:           result.UpdatedAt,
+				RegistrationVersion: result.RegistrationVersion,
 			},
 			PayloadFormat: interfaces.PayloadFormat(result.PayloadFormat),
 		})
@@ -103,4 +104,22 @@ func (s DefaultInstallationService) GetInstallations(
 
 func getExpiry(createdAt time.Time) time.Time {
 	return createdAt
+}
+
+// InvalidateDeliveryToken uses both the captured registration version and the
+// provider timestamp. A delayed failure cannot retire a renewed same token or
+// its replacement. Keeping the invalid latest row prevents stale-token fallback.
+func (s DefaultInstallationService) InvalidateDeliveryToken(ctx context.Context, installation interfaces.Installation, invalidBefore time.Time) error {
+	mechanism := installation.DeliveryMechanism
+	if installation.Id == "" || mechanism.Token == "" || mechanism.UpdatedAt.IsZero() || mechanism.RegistrationVersion <= 0 {
+		return nil
+	}
+	return s.queries.InvalidateDeliveryToken(ctx, queries.InvalidateDeliveryTokenParams{
+		InstallationID:              installation.Id,
+		Kind:                        string(mechanism.Kind),
+		Token:                       mechanism.Token,
+		ExpectedUpdatedAt:           mechanism.UpdatedAt,
+		ExpectedRegistrationVersion: mechanism.RegistrationVersion,
+		InvalidBefore:               sql.NullTime{Time: invalidBefore, Valid: !invalidBefore.IsZero()},
+	})
 }

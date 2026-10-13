@@ -95,6 +95,9 @@ func buildFcmApnsCustomData(req interfaces.SendRequest, data map[string]string) 
 		"messageType":      data["messageType"],
 		"payloadFormat":    data["payloadFormat"],
 	}
+	if req.IdempotencyKey != "" {
+		customData["notification_id"] = req.IdempotencyKey
+	}
 	if req.TopicBytesB64 != "" {
 		customData["topicBytesB64"] = req.TopicBytesB64
 	}
@@ -107,6 +110,9 @@ func buildFcmData(req interfaces.SendRequest) map[string]string {
 		"encryptedMessage": base64.StdEncoding.EncodeToString(req.EncryptedMessage),
 		"messageType":      string(req.MessageContext.MessageType),
 		"payloadFormat":    req.PayloadFormat.String(),
+	}
+	if req.IdempotencyKey != "" {
+		data["notification_id"] = req.IdempotencyKey
 	}
 	if req.TopicBytesB64 != "" {
 		data["topicBytesB64"] = req.TopicBytesB64

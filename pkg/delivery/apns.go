@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
 	"github.com/sideshow/apns2/token"
@@ -24,10 +26,11 @@ type apnsSender interface {
 // InvalidToken is deliberately narrower than Permanent: bad credentials or a
 // malformed payload must never delete a user's installation.
 type ApnsRejection struct {
-	StatusCode   int
-	Reason       string
-	InvalidToken bool
-	Permanent    bool
+	StatusCode     int
+	Reason         string
+	InvalidToken   bool
+	Permanent      bool
+	UnregisteredAt time.Time
 }
 
 func (e *ApnsRejection) Error() string {
@@ -42,12 +45,13 @@ func classifyApnsResponse(res *apns2.Response) error {
 		return nil
 	}
 	return &ApnsRejection{
-		StatusCode: res.StatusCode,
-		Reason:     res.Reason,
+		StatusCode:     res.StatusCode,
+		Reason:         res.Reason,
+		UnregisteredAt: res.Timestamp.Time,
 		InvalidToken: (res.StatusCode == http.StatusGone && res.Reason == "Unregistered") ||
 			(res.StatusCode == http.StatusBadRequest && (res.Reason == "BadDeviceToken" || res.Reason == "DeviceTokenNotForTopic")),
 		Permanent: res.StatusCode >= 400 && res.StatusCode < 500 &&
-			res.StatusCode != http.StatusTooManyRequests && res.Reason != "ExpiredProviderToken",
+			res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusForbidden,
 	}
 }
 
@@ -126,6 +130,9 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 		Custom("messageKind", string(req.MessageContext.MessageType)).
 		Custom("payloadFormat", req.PayloadFormat.String())
 
+	if req.IdempotencyKey != "" {
+		notificationPayload = notificationPayload.Custom("notification_id", req.IdempotencyKey)
+	}
 	if req.TopicBytesB64 != "" {
 		notificationPayload = notificationPayload.Custom("topicBytesB64", req.TopicBytesB64)
 	}
@@ -138,7 +145,12 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 			MutableContent()
 	}
 
+	notificationID := ""
+	if req.IdempotencyKey != "" {
+		notificationID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(req.IdempotencyKey+"|"+req.Installation.Id)).String()
+	}
 	return &apns2.Notification{
+		ApnsID:      notificationID,
 		DeviceToken: req.Installation.DeliveryMechanism.Token,
 		Topic:       a.opts.Topic,
 		Payload:     notificationPayload,

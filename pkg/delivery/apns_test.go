@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
@@ -108,7 +109,10 @@ func TestApns_SendRejectsProviderFailure(t *testing.T) {
 		{"bad_token", 400, "BadDeviceToken", true, true},
 		{"wrong_topic", 400, "DeviceTokenNotForTopic", true, true},
 		{"malformed_payload", 400, "BadPriority", true, false},
-		{"credentials", 403, "InvalidProviderToken", true, false},
+		{"credentials", 403, "InvalidProviderToken", false, false},
+		{"missing_credentials", 403, "MissingProviderToken", false, false},
+		{"bad_certificate", 403, "BadCertificate", false, false},
+		{"forbidden", 403, "Forbidden", false, false},
 		{"expired_credentials", 403, "ExpiredProviderToken", false, false},
 		{"rate_limit", 429, "TooManyRequests", false, false},
 		{"server_error", 500, "InternalServerError", false, false},
@@ -187,4 +191,29 @@ func TestApns_RealClientRejectionIsNotAcknowledged(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApns_PreservesInvalidationTimestamp(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	var rejection *ApnsRejection
+	err := classifyApnsResponse(&apns2.Response{StatusCode: 410, Reason: "Unregistered", Timestamp: apns2.Time{Time: at}})
+	require.ErrorAs(t, err, &rejection)
+	require.Equal(t, at, rejection.UnregisteredAt)
+}
+
+func TestApns_RetryRetainsNotificationIdentity(t *testing.T) {
+	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+	req.IdempotencyKey = "message-key"
+	req.Installation.Id = "first-device"
+	first := a.buildNotification(req)
+	require.NotEmpty(t, first.ApnsID)
+	require.Equal(t, first.ApnsID, a.buildNotification(req).ApnsID)
+	payloadBytes, err := first.Payload.(*payload.Payload).MarshalJSON()
+	require.NoError(t, err)
+	var value map[string]interface{}
+	require.NoError(t, json.Unmarshal(payloadBytes, &value))
+	require.Equal(t, req.IdempotencyKey, value["notification_id"])
+	req.Installation.Id = "other-device"
+	require.NotEqual(t, first.ApnsID, a.buildNotification(req).ApnsID)
 }

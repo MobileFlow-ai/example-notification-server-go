@@ -146,6 +146,8 @@ func resetSchema(t *testing.T, db *sql.DB) {
 	t.Helper()
 
 	statements := []string{
+		"DROP TABLE IF EXISTS notification_recipient_receipts",
+		"DROP TABLE IF EXISTS notification_envelopes",
 		"DROP TABLE IF EXISTS schema_migrations",
 		"DROP TABLE IF EXISTS bun_migrations",
 		"DROP TABLE IF EXISTS subscription_hmac_keys",
@@ -166,4 +168,22 @@ func assertRelationExists(t *testing.T, db *sql.DB, name string) {
 	err := db.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, "public."+name).Scan(&exists)
 	require.NoError(t, err)
 	require.True(t, exists, name)
+}
+
+func TestNotificationDurability_UpgradesExistingV5(t *testing.T) {
+	db := testdb.CreateEmptyTestDb(t)
+	require.NoError(t, database.MigrateUpTo(t.Context(), db, 5))
+	_, err := db.ExecContext(t.Context(), "INSERT INTO installations(id) VALUES ('existing'); INSERT INTO device_delivery_mechanisms(installation_id,kind,token) VALUES ('existing','apns','kept-token')")
+	require.NoError(t, err)
+	require.NoError(t, database.Migrate(t.Context(), db))
+	var token string
+	var version int64
+	var invalidated sql.NullTime
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT token,registration_version,invalidated_at FROM device_delivery_mechanisms WHERE installation_id='existing'").Scan(&token, &version, &invalidated))
+	require.Equal(t, "kept-token", token)
+	require.Equal(t, int64(1), version)
+	require.False(t, invalidated.Valid)
+	assertRelationExists(t, db, "notification_envelopes")
+	assertRelationExists(t, db, "notification_recipient_receipts")
+	require.NoError(t, database.Migrate(t.Context(), db))
 }

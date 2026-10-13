@@ -17,6 +17,7 @@ import (
 	v1 "github.com/xmtp/xmtpd/pkg/proto/message_api/v1"
 	topicpkg "github.com/xmtp/xmtpd/pkg/topic"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type Listener struct {
@@ -32,6 +33,9 @@ type Listener struct {
 	appVersion     string
 	dispatcher     deliveryDispatcher
 	ready          atomic.Bool
+	queue          interfaces.NotificationQueue
+	admissionReady atomic.Bool
+	queueHealth    atomic.Pointer[durableWorkerHealth]
 }
 
 func NewListener(
@@ -43,6 +47,7 @@ func NewListener(
 	deliveryServices []interfaces.Delivery,
 	clientVersion string,
 	appVersion string,
+	invalidators ...interfaces.TokenInvalidator,
 ) (*Listener, error) {
 	client, err := NewClient(ctx, opts.GrpcAddress, opts.UseTls, clientVersion, appVersion)
 	if err != nil {
@@ -67,13 +72,14 @@ func NewListener(
 			logger:           namedLogger,
 			ctx:              ctx,
 			deliveryServices: deliveryServices,
+			invalidTokens:    firstInvalidator(invalidators),
 		},
 	}, nil
 }
 
 func (l *Listener) Start() {
-	go l.startMessageListener()
 	l.startMessageWorkers()
+	go l.startMessageListener()
 }
 
 func (l *Listener) Stop() {
@@ -82,7 +88,7 @@ func (l *Listener) Stop() {
 }
 
 func (l *Listener) Ready() bool {
-	return l.ready.Load()
+	return l.ready.Load() && (l.queue == nil || (l.admissionReady.Load() && l.queueHealth.Load().Ready()))
 }
 
 func (l *Listener) startMessageListener() {
@@ -147,13 +153,56 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 			if msg != nil {
 				// Reset the sleep time on first successful message
 				*sleepTime = STARTING_SLEEP_TIME
-				l.messageChannel <- msg
+				if l.queue != nil {
+					if !strings.HasPrefix(msg.ContentTopic, topics.V3_PREFIX) {
+						continue
+					}
+					parsed, err := topics.ParseV3Topic(msg.ContentTopic)
+					if err != nil {
+						continue
+					}
+					known, live := waitForKnownSubscriptions(l.ctx, &l.admissionReady, l.logger, func() (bool, error) {
+						subs, err := l.subscriptions.GetSubscriptions(l.ctx, parsed, getThirtyDayPeriodsFromEpoch(msg))
+						return len(subs) > 0, err
+					})
+					if !live {
+						return true
+					}
+					if !known {
+						continue
+					}
+					payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(msg)
+					if err != nil {
+						l.logger.Error("cannot encode received V3 envelope")
+						return true
+					}
+					if !persistEnvelope(l.ctx, l.queue, "v3", buildIdempotencyKey(msg), payload, &l.admissionReady, l.logger) {
+						return true
+					}
+				} else {
+					select {
+					case l.messageChannel <- msg:
+					case <-l.ctx.Done():
+						return true
+					}
+				}
 			}
 		}
 	}
 }
 
 func (l *Listener) startMessageWorkers() {
+	if l.queue != nil {
+		l.queueHealth.Store(startDurableWorkers(l.ctx, l.queue, "v3", l.opts.NumWorkers, l.logger, func(ctx context.Context, raw []byte) error {
+			env := &v1.Envelope{}
+			if err := proto.Unmarshal(raw, env); err != nil {
+				return &invalidEnvelopeError{cause: err}
+			}
+			return l.processEnvelopeWithContext(ctx, env)
+		}))
+		return
+	}
+
 	for i := 0; i < l.opts.NumWorkers; i++ {
 		go func() {
 			var err error
@@ -169,6 +218,10 @@ func (l *Listener) startMessageWorkers() {
 }
 
 func (l *Listener) processEnvelope(env *v1.Envelope) error {
+	return l.processEnvelopeWithContext(l.ctx, env)
+}
+
+func (l *Listener) processEnvelopeWithContext(ctx context.Context, env *v1.Envelope) error {
 	if env == nil {
 		return errors.New("missing V3 envelope")
 	}
@@ -186,7 +239,7 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 	}
 
 	logger := l.logger.With(zap.String("topic", t.String()))
-	subs, err := l.subscriptions.GetSubscriptions(l.ctx, t, getThirtyDayPeriodsFromEpoch(env))
+	subs, err := l.subscriptions.GetSubscriptions(ctx, t, getThirtyDayPeriodsFromEpoch(env))
 	if err != nil {
 		return err
 	}
@@ -200,7 +253,7 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 		installationIds[i] = sub.InstallationId
 	}
 
-	installations, err := l.installations.GetInstallations(l.ctx, installationIds)
+	installations, err := l.installations.GetInstallations(ctx, installationIds)
 	if err != nil {
 		return err
 	}
@@ -211,6 +264,9 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 	}
 
 	sendRequests := buildSendRequests(env, t, installations, subs)
+	if err := l.dispatcher.prepareRecipients(ctx, sendRequests); err != nil {
+		return err
+	}
 	var deliveryErrors []error
 	for _, request := range sendRequests {
 		if !l.dispatcher.shouldDeliver(request.MessageContext, request.Subscription) {
@@ -220,7 +276,7 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 			)
 			continue
 		}
-		if err = l.dispatcher.deliver(request); err != nil {
+		if err = l.dispatcher.deliverWithContext(ctx, request); err != nil {
 			logger.Error("error delivering request", zap.Error(err))
 			deliveryErrors = append(deliveryErrors, err)
 		}
@@ -271,4 +327,10 @@ func buildSendRequests(envelope *v1.Envelope, t *topicpkg.Topic, installations [
 	}
 
 	return out
+}
+
+func (l *Listener) SetNotificationQueue(queue interfaces.NotificationQueue) {
+	l.queue = queue
+	l.dispatcher.queue = queue
+	l.admissionReady.Store(true)
 }

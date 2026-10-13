@@ -19,6 +19,7 @@ import (
 	"github.com/xmtp/xmtpd/pkg/topic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type V4Listener struct {
@@ -36,6 +37,9 @@ type V4Listener struct {
 	clientVersion   string
 	appVersion      string
 	ready           atomic.Bool
+	queue           interfaces.NotificationQueue
+	admissionReady  atomic.Bool
+	queueHealth     atomic.Pointer[durableWorkerHealth]
 }
 
 func NewV4Listener(
@@ -47,6 +51,7 @@ func NewV4Listener(
 	deliveryServices []interfaces.Delivery,
 	clientVersion string,
 	appVersion string,
+	invalidators ...interfaces.TokenInvalidator,
 ) (*V4Listener, error) {
 	client, conn, err := NewV4Client(ctx, opts.GrpcAddress, opts.UseTls, clientVersion, appVersion)
 	if err != nil {
@@ -72,13 +77,14 @@ func NewV4Listener(
 			logger:           namedLogger,
 			ctx:              ctx,
 			deliveryServices: deliveryServices,
+			invalidTokens:    firstInvalidator(invalidators),
 		},
 	}, nil
 }
 
 func (l *V4Listener) Start() {
-	go l.startEnvelopeListener()
 	l.startEnvelopeWorkers()
+	go l.startEnvelopeListener()
 }
 
 func (l *V4Listener) Stop() {
@@ -93,7 +99,7 @@ func (l *V4Listener) Stop() {
 }
 
 func (l *V4Listener) Ready() bool {
-	return l.ready.Load()
+	return l.ready.Load() && (l.queue == nil || (l.admissionReady.Load() && l.queueHealth.Load().Ready()))
 }
 
 func (l *V4Listener) startEnvelopeListener() {
@@ -153,7 +159,39 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 			if resp != nil {
 				*sleepTime = STARTING_SLEEP_TIME
 				for _, env := range resp.GetEnvelopes() {
-					l.envelopeChannel <- env
+					if l.queue != nil {
+						orig, err := envelopes.NewOriginatorEnvelope(env)
+						if err != nil {
+							l.logger.Warn("ignoring malformed received V4 envelope")
+							continue
+						}
+						target := orig.UnsignedOriginatorEnvelope.PayerEnvelope.ClientEnvelope.TargetTopic()
+						known, live := waitForKnownSubscriptions(l.ctx, &l.admissionReady, l.logger, func() (bool, error) {
+							subs, err := l.subscriptions.GetSubscriptions(l.ctx, &target, int(orig.OriginatorNs()/1_000_000_000/60/60/24/30))
+							return len(subs) > 0, err
+						})
+						if !live {
+							return true
+						}
+						if !known {
+							continue
+						}
+						payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(env)
+						if err != nil {
+							l.logger.Error("cannot encode received V4 envelope")
+							return true
+						}
+						if !persistEnvelope(l.ctx, l.queue, "v4", buildV4IdempotencyKey(orig), payload, &l.admissionReady, l.logger) {
+							return true
+						}
+					} else {
+						select {
+						case l.envelopeChannel <- env:
+						case <-l.ctx.Done():
+							close(l.envelopeChannel)
+							return true
+						}
+					}
 				}
 			}
 		}
@@ -161,6 +199,17 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 }
 
 func (l *V4Listener) startEnvelopeWorkers() {
+	if l.queue != nil {
+		l.queueHealth.Store(startDurableWorkers(l.ctx, l.queue, "v4", l.opts.NumWorkers, l.logger, func(ctx context.Context, raw []byte) error {
+			env := &envelopesProto.OriginatorEnvelope{}
+			if err := proto.Unmarshal(raw, env); err != nil {
+				return &invalidEnvelopeError{cause: err}
+			}
+			return l.processOriginatorEnvelopeWithContext(ctx, env)
+		}))
+		return
+	}
+
 	for i := 0; i < l.opts.NumWorkers; i++ {
 		go func() {
 			for env := range l.envelopeChannel {
@@ -173,6 +222,10 @@ func (l *V4Listener) startEnvelopeWorkers() {
 }
 
 func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnvelope) error {
+	return l.processOriginatorEnvelopeWithContext(l.ctx, env)
+}
+
+func (l *V4Listener) processOriginatorEnvelopeWithContext(ctx context.Context, env *envelopesProto.OriginatorEnvelope) error {
 	if env == nil {
 		return errors.New("missing V4 envelope")
 	}
@@ -189,7 +242,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 	logger := l.logger.With(zap.String("topic", targetTopic.String()), zap.Uint32("node_id", origEnv.OriginatorNodeID()), zap.Uint64("sequence_id", origEnv.OriginatorSequenceID()))
 
 	var subs []interfaces.Subscription
-	if subs, err = l.subscriptions.GetSubscriptions(l.ctx, &targetTopic, thirtyDayPeriod); err != nil {
+	if subs, err = l.subscriptions.GetSubscriptions(ctx, &targetTopic, thirtyDayPeriod); err != nil {
 		return err
 	}
 
@@ -203,7 +256,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 	}
 
 	var insts []interfaces.Installation
-	if insts, err = l.installations.GetInstallations(l.ctx, installationIds); err != nil {
+	if insts, err = l.installations.GetInstallations(ctx, installationIds); err != nil {
 		return err
 	}
 
@@ -217,7 +270,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 		installationMap[inst.Id] = inst
 	}
 
-	var deliveryErrors []error
+	requests := make([]interfaces.SendRequest, 0, len(subs))
 	for _, sub := range subs {
 		inst, exists := installationMap[sub.InstallationId]
 		if !exists {
@@ -236,6 +289,13 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 			continue
 		}
 
+		requests = append(requests, req)
+	}
+	if err := l.dispatcher.prepareRecipients(ctx, requests); err != nil {
+		return err
+	}
+	var deliveryErrors []error
+	for _, req := range requests {
 		if !l.dispatcher.shouldDeliver(req.MessageContext, req.Subscription) {
 			logger.Debug("skipping delivery of V4 request",
 				zap.Any("message_context", req.MessageContext),
@@ -244,7 +304,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 			continue
 		}
 		logger.Info("delivering notification")
-		if err = l.dispatcher.deliver(req); err != nil {
+		if err = l.dispatcher.deliverWithContext(ctx, req); err != nil {
 			logger.Error("error delivering V4 request", zap.Error(err))
 			deliveryErrors = append(deliveryErrors, err)
 		}
@@ -394,4 +454,10 @@ func (l *V4Listener) refreshV4Client() error {
 	l.v4Client = client
 	l.v4Conn = conn
 	return nil
+}
+
+func (l *V4Listener) SetNotificationQueue(queue interfaces.NotificationQueue) {
+	l.queue = queue
+	l.dispatcher.queue = queue
+	l.admissionReady.Store(true)
 }

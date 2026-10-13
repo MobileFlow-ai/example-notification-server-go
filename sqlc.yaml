@@ -4,6 +4,7 @@ sql:
     queries:
       - "pkg/db/sqlc/installations.sql"
       - "pkg/db/sqlc/subscriptions.sql"
+      - "pkg/db/sqlc/notification_queue.sql"
     schema: "pkg/db/migrations"
     gen:
       go:
