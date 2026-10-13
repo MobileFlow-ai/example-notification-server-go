@@ -2,6 +2,7 @@ package xmtp
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
@@ -62,5 +63,5 @@ func (d *deliveryDispatcher) deliver(req interfaces.SendRequest) error {
 		}
 	}
 	d.logger.Info("No delivery service matches request", zap.String("delivery_mechanism", string(req.Installation.DeliveryMechanism.Kind)))
-	return nil
+	return errors.New("no delivery service matches request")
 }

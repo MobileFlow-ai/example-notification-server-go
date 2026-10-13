@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -168,6 +169,9 @@ func (l *Listener) startMessageWorkers() {
 }
 
 func (l *Listener) processEnvelope(env *v1.Envelope) error {
+	if env == nil {
+		return errors.New("missing V3 envelope")
+	}
 	// Fast-path: skip expensive parsing for topics that can't be V3
 	if !strings.HasPrefix(env.ContentTopic, topics.V3_PREFIX) {
 		l.logger.Debug("ignoring message", zap.String("v3_topic", env.ContentTopic))
@@ -207,6 +211,7 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 	}
 
 	sendRequests := buildSendRequests(env, t, installations, subs)
+	var deliveryErrors []error
 	for _, request := range sendRequests {
 		if !l.dispatcher.shouldDeliver(request.MessageContext, request.Subscription) {
 			logger.Debug("Skipping delivery of request",
@@ -217,9 +222,10 @@ func (l *Listener) processEnvelope(env *v1.Envelope) error {
 		}
 		if err = l.dispatcher.deliver(request); err != nil {
 			logger.Error("error delivering request", zap.Error(err))
+			deliveryErrors = append(deliveryErrors, err)
 		}
 	}
-	return err
+	return errors.Join(deliveryErrors...)
 }
 
 func (l *Listener) refreshClient() error {

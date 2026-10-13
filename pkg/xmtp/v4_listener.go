@@ -2,6 +2,7 @@ package xmtp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -172,6 +173,9 @@ func (l *V4Listener) startEnvelopeWorkers() {
 }
 
 func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnvelope) error {
+	if env == nil {
+		return errors.New("missing V4 envelope")
+	}
 	origEnv, err := envelopes.NewOriginatorEnvelope(env)
 	if err != nil {
 		l.logger.Info("skipping envelope: failed to parse originator envelope", zap.Error(err))
@@ -213,6 +217,7 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 		installationMap[inst.Id] = inst
 	}
 
+	var deliveryErrors []error
 	for _, sub := range subs {
 		inst, exists := installationMap[sub.InstallationId]
 		if !exists {
@@ -241,10 +246,11 @@ func (l *V4Listener) processOriginatorEnvelope(env *envelopesProto.OriginatorEnv
 		logger.Info("delivering notification")
 		if err = l.dispatcher.deliver(req); err != nil {
 			logger.Error("error delivering V4 request", zap.Error(err))
+			deliveryErrors = append(deliveryErrors, err)
 		}
 	}
 
-	return nil
+	return errors.Join(deliveryErrors...)
 }
 
 // buildV4SendRequest constructs a SendRequest for the given installation.

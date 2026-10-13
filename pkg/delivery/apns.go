@@ -3,6 +3,8 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -14,9 +16,44 @@ import (
 	"go.uber.org/zap"
 )
 
+type apnsSender interface {
+	PushWithContext(apns2.Context, *apns2.Notification) (*apns2.Response, error)
+}
+
+// ApnsRejection preserves provider failure classification for durable dispatch.
+// InvalidToken is deliberately narrower than Permanent: bad credentials or a
+// malformed payload must never delete a user's installation.
+type ApnsRejection struct {
+	StatusCode   int
+	Reason       string
+	InvalidToken bool
+	Permanent    bool
+}
+
+func (e *ApnsRejection) Error() string {
+	return fmt.Sprintf("APNs rejected notification: status %d, reason %s", e.StatusCode, e.Reason)
+}
+
+func classifyApnsResponse(res *apns2.Response) error {
+	if res == nil {
+		return errors.New("APNs returned no response")
+	}
+	if res.StatusCode == http.StatusOK {
+		return nil
+	}
+	return &ApnsRejection{
+		StatusCode: res.StatusCode,
+		Reason:     res.Reason,
+		InvalidToken: (res.StatusCode == http.StatusGone && res.Reason == "Unregistered") ||
+			(res.StatusCode == http.StatusBadRequest && (res.Reason == "BadDeviceToken" || res.Reason == "DeviceTokenNotForTopic")),
+		Permanent: res.StatusCode >= 400 && res.StatusCode < 500 &&
+			res.StatusCode != http.StatusTooManyRequests && res.Reason != "ExpiredProviderToken",
+	}
+}
+
 type ApnsDelivery struct {
 	logger     *zap.Logger
-	apnsClient *apns2.Client
+	apnsClient apnsSender
 	opts       options.ApnsOptions
 }
 
@@ -63,6 +100,13 @@ func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 	notification := a.buildNotification(req)
 
 	res, err := a.apnsClient.PushWithContext(ctx, notification)
+	if err != nil {
+		return err
+	}
+	if err = classifyApnsResponse(res); err != nil {
+		a.logger.Warn("APNs notification rejected", zap.Error(err))
+		return err
+	}
 	if res != nil {
 		a.logger.Info(
 			"Sent notification",
@@ -72,7 +116,7 @@ func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 		)
 	}
 
-	return err
+	return nil
 }
 
 func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notification {
