@@ -23,6 +23,23 @@ func cappedBackoff(sleepTime time.Duration) time.Duration {
 	return sleepTime
 }
 
+// waitForReconnect bounds retry frequency, including graceful stream EOF,
+// while allowing Stop to interrupt the longest backoff immediately.
+func waitForReconnect(ctx context.Context, delay *time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	timer := time.NewTimer(*delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		*delay = cappedBackoff(*delay)
+		return ctx.Err() == nil
+	}
+}
+
 // NotificationListener is the interface implemented by both V3 and V4 listeners
 type NotificationListener interface {
 	Start()

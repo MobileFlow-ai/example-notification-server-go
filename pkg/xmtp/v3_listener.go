@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	v1 "github.com/xmtp/xmtpd/pkg/proto/message_api/v1"
 	topicpkg "github.com/xmtp/xmtpd/pkg/topic"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,6 +26,8 @@ type Listener struct {
 	logger         *zap.Logger
 	ctx            context.Context
 	cancelFunc     func()
+	connMu         sync.Mutex
+	v3Conn         *grpc.ClientConn
 	xmtpClient     v1.MessageApiClient
 	opts           options.XmtpOptions
 	messageChannel chan *v1.Envelope
@@ -49,7 +53,7 @@ func NewListener(
 	appVersion string,
 	invalidators ...interfaces.TokenInvalidator,
 ) (*Listener, error) {
-	client, err := NewClient(ctx, opts.GrpcAddress, opts.UseTls, clientVersion, appVersion)
+	conn, err := newConn(opts.GrpcAddress, opts.UseTls, clientVersion, appVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +65,8 @@ func NewListener(
 		ctx:            ctx,
 		cancelFunc:     cancel,
 		logger:         namedLogger,
-		xmtpClient:     client,
+		xmtpClient:     v1.NewMessageApiClient(conn),
+		v3Conn:         conn,
 		opts:           opts,
 		messageChannel: make(chan *v1.Envelope, 100),
 		installations:  installations,
@@ -85,6 +90,12 @@ func (l *Listener) Start() {
 func (l *Listener) Stop() {
 	l.ready.Store(false)
 	l.cancelFunc()
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+	if l.v3Conn != nil {
+		_ = l.v3Conn.Close()
+		l.v3Conn = nil
+	}
 }
 
 func (l *Listener) Ready() bool {
@@ -94,6 +105,7 @@ func (l *Listener) Ready() bool {
 func (l *Listener) startMessageListener() {
 	l.logger.Info("starting message listener")
 	defer close(l.messageChannel)
+	defer l.Stop()
 
 	sleepTime := STARTING_SLEEP_TIME
 	for {
@@ -110,8 +122,9 @@ func (l *Listener) startMessageListener() {
 			}
 
 			l.logger.Error("error connecting to stream", zap.Error(err))
-			time.Sleep(sleepTime)
-			sleepTime = cappedBackoff(sleepTime)
+			if !waitForReconnect(l.ctx, &sleepTime) {
+				return
+			}
 			if err = l.refreshClient(); err != nil {
 				l.logger.Error("error refreshing client", zap.Error(err))
 			}
@@ -135,15 +148,17 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 		default:
 			msg, err := stream.Recv()
 			if err == io.EOF {
+				l.ready.Store(false)
 				l.logger.Info("stream closed")
-				return false
+				return !waitForReconnect(l.ctx, sleepTime)
 			}
 
 			if err != nil {
 				l.logger.Warn("error reading from stream", zap.Error(err))
-				// Wait 100ms to avoid hammering the API and getting rate limited
-				time.Sleep(*sleepTime)
-				*sleepTime = cappedBackoff(*sleepTime)
+				l.ready.Store(false)
+				if !waitForReconnect(l.ctx, sleepTime) {
+					return true
+				}
 				if err = l.refreshClient(); err != nil {
 					l.logger.Error("error refreshing client", zap.Error(err))
 				}
@@ -285,12 +300,20 @@ func (l *Listener) processEnvelopeWithContext(ctx context.Context, env *v1.Envel
 }
 
 func (l *Listener) refreshClient() error {
-	client, err := NewClient(l.ctx, l.opts.GrpcAddress, l.opts.UseTls, l.clientVersion, l.appVersion)
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+	if err := l.ctx.Err(); err != nil {
+		return err
+	}
+	conn, err := newConn(l.opts.GrpcAddress, l.opts.UseTls, l.clientVersion, l.appVersion)
 	if err != nil {
 		return err
 	}
-	l.xmtpClient = client
-
+	if l.v3Conn != nil {
+		_ = l.v3Conn.Close()
+	}
+	l.v3Conn = conn
+	l.xmtpClient = v1.NewMessageApiClient(conn)
 	return nil
 }
 

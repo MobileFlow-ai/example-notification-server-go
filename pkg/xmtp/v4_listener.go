@@ -104,11 +104,12 @@ func (l *V4Listener) Ready() bool {
 
 func (l *V4Listener) startEnvelopeListener() {
 	l.logger.Info("starting V4 envelope listener")
+	defer close(l.envelopeChannel)
+	defer l.Stop()
 	sleepTime := STARTING_SLEEP_TIME
 	for {
 		select {
 		case <-l.ctx.Done():
-			close(l.envelopeChannel)
 			return
 		default:
 		}
@@ -116,8 +117,9 @@ func (l *V4Listener) startEnvelopeListener() {
 		stream, err := l.v4Client.SubscribeAllEnvelopes(l.ctx, &notificationApi.SubscribeAllEnvelopesRequest{})
 		if err != nil {
 			l.logger.Error("error connecting to V4 stream", zap.Error(err))
-			time.Sleep(sleepTime)
-			sleepTime = cappedBackoff(sleepTime)
+			if !waitForReconnect(l.ctx, &sleepTime) {
+				return
+			}
 			if err = l.refreshV4Client(); err != nil {
 				l.logger.Error("error refreshing V4 client", zap.Error(err))
 			}
@@ -137,19 +139,21 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 	for {
 		select {
 		case <-l.ctx.Done():
-			close(l.envelopeChannel)
 			return true
 		default:
 			resp, err := stream.Recv()
 			if err == io.EOF {
+				l.ready.Store(false)
 				l.logger.Info("V4 stream closed")
-				return false
+				return !waitForReconnect(l.ctx, sleepTime)
 			}
 
 			if err != nil {
 				l.logger.Error("error reading from V4 stream", zap.Error(err))
-				time.Sleep(*sleepTime)
-				*sleepTime = cappedBackoff(*sleepTime)
+				l.ready.Store(false)
+				if !waitForReconnect(l.ctx, sleepTime) {
+					return true
+				}
 				if err = l.refreshV4Client(); err != nil {
 					l.logger.Error("error refreshing V4 client", zap.Error(err))
 				}
@@ -188,7 +192,6 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 						select {
 						case l.envelopeChannel <- env:
 						case <-l.ctx.Done():
-							close(l.envelopeChannel)
 							return true
 						}
 					}
@@ -444,12 +447,15 @@ func buildV4IdempotencyKey(env *envelopes.OriginatorEnvelope) string {
 func (l *V4Listener) refreshV4Client() error {
 	l.connMu.Lock()
 	defer l.connMu.Unlock()
-	if l.v4Conn != nil {
-		_ = l.v4Conn.Close()
+	if err := l.ctx.Err(); err != nil {
+		return err
 	}
 	client, conn, err := NewV4Client(l.ctx, l.opts.GrpcAddress, l.opts.UseTls, l.clientVersion, l.appVersion)
 	if err != nil {
 		return err
+	}
+	if l.v4Conn != nil {
+		_ = l.v4Conn.Close()
 	}
 	l.v4Client = client
 	l.v4Conn = conn
