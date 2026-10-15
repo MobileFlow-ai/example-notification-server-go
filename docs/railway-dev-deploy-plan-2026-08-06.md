@@ -1,5 +1,29 @@
 # Railway dev deployment plan — Hytch XMTP push bridge (2026-08-06)
 
+## 2026-10-15 source-state correction
+
+This correction is pinned to main `3caaa4d2`. The historical assertion/Gate-6
+lease equality defect was repaired by `967c828` (included in this main).
+Currentness keeps the roster-lease and bridge-lease namespaces separate and
+checks the route's exact assertion and authority provenance. The opt-in vault
+fixture exercises accepted control, watermark and replacement without forcing
+matching lease IDs; it uses verified objects and a trust stub, so it does not
+prove authenticated private ingress or deployed delivery.
+
+Current source also permits APNS startup under the complete dev-only A9/A10
+secure configuration introduced by `c3cf528`; `APNS_ENABLED=true` alone fails
+closed. The authoritative predicates are `apnsRuntimeConfigurationValid`,
+`a9RuntimeConfigurationValid` and `a10RuntimeConfigurationValid` in
+`cmd/server/main.go`, followed by the secure database and startup gates.
+This source support does not authorize credentials, provider calls, activation,
+migration retirement or deployment. Keep the audit configuration's APNS and A9
+flags off. Welcome remains compiled hard-closed. Actual deployed activation,
+private-ingress integration and provider/device acceptance remain unverified.
+
+The dated August findings below retain their original scope. Repair `967c828`
+landed after the PR #7 update; that source repair is no longer an outstanding
+merge prerequisite. Other deployment and acceptance holds remain.
+
 **Status: PLAN ONLY. Nothing here is a deploy authorization.** The deploy
 button, Railway service creation, every Railway variable write, APNs key
 provisioning, and all merges remain human actions. This plan operationalizes
@@ -10,7 +34,7 @@ behavior and variable semantics) and
 disagree, they win.
 
 The deployable configuration is the **blocked audit mode**: API + V4 listener,
-secure vault, A9 disabled, `APNS_ENABLED=false` (the binary rejects `true`),
+secure vault, A9 disabled, `APNS_ENABLED=false` (`true` alone fails the complete A9/A10 predicates),
 Welcome hard-closed. It observes XMTP dev and proves runtime health; it
 delivers nothing. A9/APNs activation is a separate, later, human-authorized
 change with its own gates. V4 is pinned early only to remove a live-command
@@ -24,7 +48,7 @@ edit from that later ceremony; it does not activate A9.
 | Service name | `dev-xmtp-bridge` |
 | Source | GitHub `MobileFlow-ai/example-notification-server-go`, branch: the post-merge `main` (after #2 → #4 → #3 → #5 land; never a draft head) |
 | Build | repository `Dockerfile` (pinned Go/alpine, non-root). Set build args so image provenance records the exact commit; do not ship `unknown` provenance |
-| Config as code | `railway.toml` at repo root (audit mode). Do not hand-edit it in the UI to enable A9 or APNS; both are startup-rejected anyway |
+| Config as code | `railway.toml` at repo root (audit mode). Do not hand-edit it in the UI to enable A9 or APNS; separate approval and the complete secure startup gates are required |
 | Replicas | exactly 1 |
 | Region | same as `dev-modern-api` (private-network adjacency for the future A9 keyset origin) |
 | Public networking | none required for audit mode. If Railway assigns a domain, it exposes only `/livez`, `/readyz`, `/health/xmtp`, and the bearer-gated API; prefer no public domain and private networking only |
@@ -59,7 +83,7 @@ Never print, copy, or log values. Set in the Railway service UI only.
 | `BRIDGE_VAULT_LEASE_TTL_HOURS` | `168` | literal |
 | `BRIDGE_WELCOME_ENABLED` | `false` | literal; startup rejects `true` |
 | `BRIDGE_TEEN_CONVERSATION_MODE` | `disabled` | literal |
-| `APNS_ENABLED` | `false` | literal; startup rejects `true` in this build |
+| `APNS_ENABLED` | `false` | audit configuration; true alone fails the complete A9/A10 predicates |
 | `XMTP_GRPC_ADDRESS` | `grpc.dev.xmtp.network:443` | literal |
 | `LISTENER_TYPE` | `v4` | literal; A9 remains disabled until its separate reviewed ceremony |
 | `API_PORT` | service port | Railway |
@@ -92,7 +116,7 @@ and incident-access variables (separate, later, reviewed change).
 ## 5. APNs credentials — by reference only
 
 **No APNs credential is needed, or permitted, for this deploy.**
-`APNS_ENABLED=false` and the binary rejects `true`; maintenance modes cannot
+`APNS_ENABLED=false`; this audit configuration permits no provider client, and maintenance modes cannot
 initialize APNS. Nothing below happens now.
 
 For the future, separately reviewed APNs sandbox activation, the provisioning
@@ -241,4 +265,5 @@ With PR #7, the full `pkg/vault` suite is green under
 whole-repo opt-in suite is green, and `make runtime-qa` passes end-to-end
 at the fix head. A9-mode activation remains blocked on the checklist items
 above (landed producer, key ceremonies, authorized E2E gate) — but no
-longer on a red bridge CAS surface once #7 lands with cross-agent review.
+longer on that historical bridge CAS defect: `967c828` is included in current
+main. The source correction above does not claim deployed acceptance.

@@ -1,5 +1,25 @@
 # Hytch XMTP Push Bridge — Railway Dev Runbook
 
+## 2026-10-15 source-state correction
+
+This correction is pinned to main `3caaa4d2`. The historical assertion/Gate-6
+lease equality defect was repaired by `967c828` (included in this main).
+Currentness keeps the roster-lease and bridge-lease namespaces separate and
+checks the route's exact assertion and authority provenance. The opt-in vault
+fixture exercises accepted control, watermark and replacement without forcing
+matching lease IDs; it uses verified objects and a trust stub, so it does not
+prove authenticated private ingress or deployed delivery.
+
+Current source also permits APNS startup under the complete dev-only A9/A10
+secure configuration introduced by `c3cf528`; `APNS_ENABLED=true` alone fails
+closed. The authoritative predicates are `apnsRuntimeConfigurationValid`,
+`a9RuntimeConfigurationValid` and `a10RuntimeConfigurationValid` in
+`cmd/server/main.go`, followed by the secure database and startup gates.
+This source support does not authorize credentials, provider calls, activation,
+migration retirement or deployment. Keep the audit configuration's APNS and A9
+flags off. Welcome remains compiled hard-closed. Actual deployed activation,
+private-ingress integration and provider/device acceptance remain unverified.
+
 ## 2026-08-04 L4 local-evidence correction
 
 The dedicated local runtime-QA harness is now confirmed at its narrow scope:
@@ -8,14 +28,11 @@ the bridge image built and ran on loopback ports 15432/18080, migration
 policy verifier passed. This corrects the prior blanket statement that all
 local runtime QA was unconfirmed.
 
-That narrow pass does not establish A9 route availability. A separate
-lane-isolated vault probe currently returns no route after accepted A9 control,
-watermark, and replacement because currentness requires the assertion lease ID
-to equal the Gate-6 lease selected by replacement (newly generated on the
-new-route path), which is independent of the assertion lease. The replacement
-request carries no assertion lease ID to establish that identity.
-This is a documented source-backed fail-closed blocker, not a test fixture to
-override; see [xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md).
+That narrow pass does not establish A9 route availability. The August 4 lane-isolated vault probe found an assertion/Gate-6 lease
+namespace defect. That source defect is fixed by `967c828`, included in main
+`3caaa4d2`; see the current correction above. The original failure remains
+historical evidence in
+[xmtp-dev-e2e-acceptance-2026-08.md](xmtp-dev-e2e-acceptance-2026-08.md).
 
 It changes **none** of the deployment gates below. The harness remains
 API-only with secure vault, A9, APNS, Welcome, and the XMTP listener disabled;
@@ -89,7 +106,7 @@ corresponding modern-api/iOS vector suite passes.
   pinned now so the later reviewed ceremony never hand-edits a live start
   command. The
   configuration supplies no delivery service: `APNS_ENABLED` must remain
-  false, and startup rejects true. The listener may consume XMTP for
+  false; true alone fails the complete A9/A10 startup predicates. The listener may consume XMTP for
   health/audit behavior with zero delivery services.
 - Railway's deployment healthcheck is `GET /readyz`; Railway evaluates it while
   bringing up a deployment, not as a continuous restart probe. The checked-in
@@ -99,7 +116,7 @@ corresponding modern-api/iOS vector suite passes.
   an XMTP outage, avoiding an operator-induced restart loop.
 - `GET /readyz` is aggregate readiness. It is `503 not_ready` when XMTP is
   disconnected, retention is unsafe, a configured APNS worker has stopped, or
-  the deletion-only invalid-token worker is unavailable. This hard-closed build
+  the deletion-only invalid-token worker is unavailable. The audit configuration
   has no APNS worker to evaluate. When separately configured, private
   incident-access failure removes readiness and terminates the runtime. The
   dormant A9 path would additionally require its private listener plus a
@@ -172,13 +189,13 @@ Current blocked-state APNS setting:
 - `APNS_ENABLED=false`
 
 Do not load or use APNS provider credentials until A9 activation evidence and
-the G8 amendment are approved in a reviewed change. The current binary also
-rejects `APNS_ENABLED=true` at runtime startup, so a stale Railway variable
-fails closed rather than enabling provider egress. Maintenance-only migration
+the G8 amendment are approved in a reviewed change. The current binary rejects `APNS_ENABLED=true` unless the complete dev-only
+A9/A10 secure configuration and later startup gates pass. A stale APNS flag
+alone therefore fails closed; this is not an unconditional source hard-close. Maintenance-only migration
 and preflight modes cannot initialize APNS.
 
-Post-gate APNS sandbox variables, after that startup rejection is removed in
-the same reviewed implementation:
+Post-gate APNS sandbox variables, only after the separate activation, evidence and Security/Privacy gates
+are approved; existing source predicates must still pass:
 
 - `APNS_ENABLED=true`
 - `APNS_MODE=development`
@@ -832,7 +849,7 @@ size, and sender/content are absent.
 - Invalid-token erasure runs in a deletion-only worker with no APNS client or
   credential dependency. It synchronously recovers available markers before
   retention readiness, continues while retention is unsafe, and remains active
-  while `APNS_ENABLED=false`; the current startup hard-close disables egress,
+  while `APNS_ENABLED=false`; the audit configuration disables egress,
   not deletion authority. Its retry exponent is persisted independently from
   the three-call APNS ceiling and reaches the configured 30-second capped
   backoff.
@@ -1170,16 +1187,15 @@ owning client/server tracks and rerun step 5 before claiming that scope.
 
 ## Diagnose a missing notification
 
-In this hard-closed build, a missing APNS notification is the expected result.
-`APNS_ENABLED=true` is rejected before runtime initialization, so diagnosis
-ends by confirming the exact deployed revision and that startup rejection. Do
-not add credentials, bypass the guard, or query raw vault data. The audit-only
-checks that remain meaningful are `/livez`, `/readyz`, `/health/xmtp`, and
-sanitized fixed logs.
+In the documented audit configuration, a missing APNS notification is expected.
+Confirm the exact deployed revision and sanitized flag posture; no deployed
+activation is established by this repository. Current source can construct
+APNS only after the complete dev A9/A10 predicates and secure startup gates
+pass. Do not add credentials, bypass guards or query raw vault data. The
+audit-only checks remain `/livez`, `/readyz`, `/health/xmtp` and fixed logs.
 
-The following procedure is reserved for a later reviewed post-gate revision
-that removes the startup rejection and implements A9/Gate 8. It does not
-authorize those actions on this revision:
+The following procedure is reserved for a separately reviewed and authorized
+post-gate activation. Its presence does not authorize activation:
 
 1. Check `/livez`, `/readyz`, and `/health/xmtp`. XMTP `503` with liveness `200`
    is a dependency outage, not a process crash.
@@ -1214,14 +1230,15 @@ backpressure.
 
 ## Diagnose a spurious notification
 
-A spurious push attributed to this exact hard-closed build is first a deployment
-provenance or configuration-integrity defect: the binary rejects APNS
-activation and has no provider client. Preserve only sanitized revision and
-deployment identifiers, set/keep `APNS_ENABLED=false`, and verify the running
-image digest before any other diagnosis.
+A spurious push attributed to the audit configuration is a deployment
+provenance or configuration-integrity defect: with APNS disabled, that runtime
+has no provider client. Current source does permit separately gated dev
+activation, so verify the running image and sanitized configuration rather
+than inferring an unconditional binary hard-close. Preserve only sanitized
+revision and deployment identifiers and keep `APNS_ENABLED=false`.
 
-The following response procedure applies only to a later reviewed post-gate
-revision that permits APNS egress:
+The following response procedure applies only to a separately reviewed and
+authorized post-gate runtime:
 
 1. Set `APNS_ENABLED=false` on the dev bridge and redeploy the same revision.
    Confirm the listener remains available but APNS has zero calls.
@@ -1241,8 +1258,8 @@ revision that permits APNS egress:
 
 ## Rollback
 
-1. Keep `APNS_ENABLED=false`. This revision already rejects true; a running
-   provider client indicates that a different or modified revision is deployed.
+1. Keep `APNS_ENABLED=false`. A running provider client conflicts with the
+   documented audit configuration; verify exact revision and configuration.
 2. Treat database migrations as monotonic. Do not blindly redeploy the
    immediately preceding binary: migration 11 advances the exact schema
    version and hardened activation-function hash, so the version-10 binary
@@ -1260,9 +1277,9 @@ revision that permits APNS egress:
 4. Verify `/livez`, `/readyz`, `/health/xmtp`, atomic refresh, conversation
    positive, control/ephemeral negative, self-message negative, and the Welcome
    configuration hard-close.
-5. Only a later reviewed revision that removes the startup hard-close may
-   re-enable `APNS_ENABLED`, after its A9/Gate 8 activation and negative
-   fixtures are green.
+5. Re-enable `APNS_ENABLED` only after separate A9/A10/Gate 8 activation
+   approval and negative fixtures pass for the exact reviewed runtime.
+   Conditional source support alone provides no activation authority.
 
 ## Secret and key rotation
 
