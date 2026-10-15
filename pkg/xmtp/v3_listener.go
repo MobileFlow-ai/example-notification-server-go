@@ -115,6 +115,7 @@ func (l *Listener) Failed() <-chan struct{} {
 }
 
 func (l *Listener) startMessageListener() {
+	defer l.Stop()
 	defer close(l.messageChannel)
 	l.logger.Info("starting message listener")
 
@@ -136,8 +137,9 @@ func (l *Listener) startMessageListener() {
 			}
 
 			l.logDependencyFailure()
-			time.Sleep(sleepTime)
-			sleepTime = cappedBackoff(sleepTime)
+			if !waitForReconnect(l.ctx, &sleepTime) {
+				return
+			}
 			if err = l.refreshClient(); err != nil {
 				l.logDependencyFailure()
 			}
@@ -168,14 +170,15 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 			}
 			if err == io.EOF {
 				l.logDependencyFailure()
-				return false
+				return !waitForReconnect(l.ctx, sleepTime)
 			}
 
 			if err != nil {
 				l.logDependencyFailure()
 				// Wait 100ms to avoid hammering the API and getting rate limited
-				time.Sleep(*sleepTime)
-				*sleepTime = cappedBackoff(*sleepTime)
+				if !waitForReconnect(l.ctx, sleepTime) {
+					return true
+				}
 				if err = l.refreshClient(); err != nil {
 					l.logDependencyFailure()
 				}
@@ -185,7 +188,11 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 			if msg != nil {
 				// Reset the sleep time on first successful message
 				*sleepTime = STARTING_SLEEP_TIME
-				l.messageChannel <- msg
+				select {
+				case l.messageChannel <- msg:
+				case <-l.ctx.Done():
+					return true
+				}
 			}
 		}
 	}

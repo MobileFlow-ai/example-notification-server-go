@@ -109,6 +109,7 @@ func (l *V4Listener) Failed() <-chan struct{} {
 }
 
 func (l *V4Listener) startEnvelopeListener() {
+	defer l.Stop()
 	defer close(l.envelopeChannel)
 	l.logger.Info("starting V4 envelope listener")
 
@@ -125,9 +126,13 @@ func (l *V4Listener) startEnvelopeListener() {
 
 		stream, err := l.v4Client.SubscribeAllEnvelopes(l.ctx, &notificationApi.SubscribeAllEnvelopesRequest{})
 		if err != nil {
+			if l.ctx.Err() != nil {
+				return
+			}
 			l.logDependencyFailure()
-			time.Sleep(sleepTime)
-			sleepTime = cappedBackoff(sleepTime)
+			if !waitForReconnect(l.ctx, &sleepTime) {
+				return
+			}
 			if err = l.refreshV4Client(); err != nil {
 				l.logDependencyFailure()
 			}
@@ -158,13 +163,14 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 			}
 			if err == io.EOF {
 				l.logDependencyFailure()
-				return false
+				return !waitForReconnect(l.ctx, sleepTime)
 			}
 
 			if err != nil {
 				l.logDependencyFailure()
-				time.Sleep(*sleepTime)
-				*sleepTime = cappedBackoff(*sleepTime)
+				if !waitForReconnect(l.ctx, sleepTime) {
+					return true
+				}
 				if err = l.refreshV4Client(); err != nil {
 					l.logDependencyFailure()
 				}
@@ -174,7 +180,11 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 			if resp != nil {
 				*sleepTime = STARTING_SLEEP_TIME
 				for _, env := range resp.GetEnvelopes() {
-					l.envelopeChannel <- env
+					select {
+					case l.envelopeChannel <- env:
+					case <-l.ctx.Done():
+						return true
+					}
 				}
 			}
 		}
@@ -529,6 +539,7 @@ func (l *V4Listener) refreshV4Client() error {
 	}
 	if l.v4Conn != nil {
 		_ = l.v4Conn.Close()
+		l.v4Conn = nil
 	}
 	client, conn, err := NewV4Client(l.ctx, l.opts.GrpcAddress, l.opts.UseTls, l.clientVersion, l.appVersion)
 	if err != nil {

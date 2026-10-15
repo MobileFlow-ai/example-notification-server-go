@@ -26,7 +26,7 @@ func replayProtectorUnavailable(protector ReplayProtector) bool {
 		reflect.Func,
 		reflect.Interface,
 		reflect.Map,
-		reflect.Ptr,
+		reflect.Pointer,
 		reflect.Slice,
 		reflect.UnsafePointer:
 		return value.IsNil()

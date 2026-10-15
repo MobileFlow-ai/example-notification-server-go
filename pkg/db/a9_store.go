@@ -16,10 +16,11 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/a9trust"
 )
 
+const a9SafeIntegerMaximum uint64 = 9007199254740991
+
 const (
-	a9SafeIntegerMaximum   uint64 = 9007199254740991
-	a9KeysetLockClass             = 0x4139
-	a9SerializableAttempts        = 5
+	a9KeysetLockClass      = 0x4139
+	a9SerializableAttempts = 5
 
 	a9KeysetStateCurrent   int16 = 1
 	a9KeysetStateUncertain int16 = 2
@@ -1234,8 +1235,8 @@ func validCanonicalA9UUID(value string) bool {
 		if index == 8 || index == 13 || index == 18 || index == 23 {
 			continue
 		}
-		if !((character >= '0' && character <= '9') ||
-			(character >= 'a' && character <= 'f')) {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
 			return false
 		}
 	}

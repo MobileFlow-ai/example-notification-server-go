@@ -72,7 +72,7 @@ func execute(casesPath string, output io.Writer) error {
 	seen := make(map[string]struct{}, len(cases))
 	for _, testCase := range cases {
 		if testCase.ID == "" {
-			return errors.New("Gate 6 case ID required")
+			return errors.New("gate 6 case ID required")
 		}
 		if _, exists := seen[testCase.ID]; exists {
 			return errors.New("duplicate Gate 6 case ID")

@@ -57,7 +57,7 @@ func TestV3StreamErrorDropsReadinessBeforeRecoveryWork(t *testing.T) {
 	listener.ready.Store(true)
 	backoff := time.Duration(0)
 
-	require.False(
+	require.True(
 		t,
 		listener.consumeMessageStream(&terminalV3Stream{}, &backoff),
 	)
@@ -86,7 +86,7 @@ func TestV4StreamErrorDropsReadinessBeforeRecoveryWork(t *testing.T) {
 	listener.ready.Store(true)
 	backoff := time.Duration(0)
 
-	require.False(
+	require.True(
 		t,
 		listener.consumeEnvelopeStream(&terminalV4Stream{}, &backoff),
 	)
