@@ -107,7 +107,7 @@ func TestApns_SendRejectsProviderFailure(t *testing.T) {
 	}{
 		{"unregistered", 410, "Unregistered", true, true},
 		{"bad_token", 400, "BadDeviceToken", true, true},
-		{"wrong_topic", 400, "DeviceTokenNotForTopic", true, true},
+		{"wrong_topic", 400, "DeviceTokenNotForTopic", true, false},
 		{"malformed_payload", 400, "BadPriority", true, false},
 		{"credentials", 403, "InvalidProviderToken", false, false},
 		{"missing_credentials", 403, "MissingProviderToken", false, false},
@@ -216,4 +216,19 @@ func TestApns_RetryRetainsNotificationIdentity(t *testing.T) {
 	require.Equal(t, req.IdempotencyKey, value["notification_id"])
 	req.Installation.Id = "other-device"
 	require.NotEqual(t, first.ApnsID, a.buildNotification(req).ApnsID)
+}
+
+func TestApns_RealTopicMismatchPreservesRegistration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"reason":"DeviceTokenNotForTopic"}`))
+	}))
+	defer server.Close()
+	client := &apns2.Client{Host: server.URL, HTTPClient: server.Client()}
+	a := ApnsDelivery{logger: zap.NewNop(), apnsClient: client}
+	err := a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3))
+	var rejection *ApnsRejection
+	require.ErrorAs(t, err, &rejection)
+	require.True(t, rejection.Permanent, "do not retry this notification with the same topic")
+	require.False(t, rejection.InvalidToken, "a topic mismatch must not retire the device registration")
 }

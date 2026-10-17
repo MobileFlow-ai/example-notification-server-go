@@ -37,6 +37,7 @@ func TestInvalidTokenCleanup_OnlyProviderTokenRejections(t *testing.T) {
 		{"unregistered", &delivery.ApnsRejection{StatusCode: 410, InvalidToken: true, UnregisteredAt: at}, true},
 		{"unregistered_without_timestamp", &delivery.ApnsRejection{StatusCode: 410, InvalidToken: true}, false},
 		{"bad_token", &delivery.ApnsRejection{StatusCode: 400, InvalidToken: true}, true},
+		{"wrong_topic", &delivery.ApnsRejection{StatusCode: 400, Reason: "DeviceTokenNotForTopic", Permanent: true}, false},
 		{"credentials", &delivery.ApnsRejection{StatusCode: 403, Permanent: true}, false},
 		{"rate_limited", &delivery.ApnsRejection{StatusCode: 429}, false},
 	} {

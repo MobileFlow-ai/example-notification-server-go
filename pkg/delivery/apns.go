@@ -24,7 +24,8 @@ type apnsSender interface {
 
 // ApnsRejection preserves provider failure classification for durable dispatch.
 // InvalidToken is deliberately narrower than Permanent: bad credentials or a
-// malformed payload must never delete a user's installation.
+// malformed payload must never delete a user's installation. A token/topic
+// mismatch rejects this send but does not establish that the token is invalid.
 type ApnsRejection struct {
 	StatusCode     int
 	Reason         string
@@ -49,7 +50,7 @@ func classifyApnsResponse(res *apns2.Response) error {
 		Reason:         res.Reason,
 		UnregisteredAt: res.Timestamp.Time,
 		InvalidToken: (res.StatusCode == http.StatusGone && res.Reason == "Unregistered") ||
-			(res.StatusCode == http.StatusBadRequest && (res.Reason == "BadDeviceToken" || res.Reason == "DeviceTokenNotForTopic")),
+			(res.StatusCode == http.StatusBadRequest && res.Reason == "BadDeviceToken"),
 		Permanent: res.StatusCode >= 400 && res.StatusCode < 500 &&
 			res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusForbidden,
 	}
