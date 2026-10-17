@@ -3,9 +3,13 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
 	"github.com/sideshow/apns2/token"
@@ -14,9 +18,47 @@ import (
 	"go.uber.org/zap"
 )
 
+type apnsSender interface {
+	PushWithContext(apns2.Context, *apns2.Notification) (*apns2.Response, error)
+}
+
+// ApnsRejection preserves provider failure classification for durable dispatch.
+// InvalidToken is deliberately narrower than Permanent: bad credentials or a
+// malformed payload must never delete a user's installation. A token/topic
+// mismatch rejects this send but does not establish that the token is invalid.
+type ApnsRejection struct {
+	StatusCode     int
+	Reason         string
+	InvalidToken   bool
+	Permanent      bool
+	UnregisteredAt time.Time
+}
+
+func (e *ApnsRejection) Error() string {
+	return fmt.Sprintf("APNs rejected notification: status %d, reason %s", e.StatusCode, e.Reason)
+}
+
+func classifyApnsResponse(res *apns2.Response) error {
+	if res == nil {
+		return errors.New("APNs returned no response")
+	}
+	if res.StatusCode == http.StatusOK {
+		return nil
+	}
+	return &ApnsRejection{
+		StatusCode:     res.StatusCode,
+		Reason:         res.Reason,
+		UnregisteredAt: res.Timestamp.Time,
+		InvalidToken: (res.StatusCode == http.StatusGone && res.Reason == "Unregistered") ||
+			(res.StatusCode == http.StatusBadRequest && res.Reason == "BadDeviceToken"),
+		Permanent: res.StatusCode >= 400 && res.StatusCode < 500 &&
+			res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusForbidden,
+	}
+}
+
 type ApnsDelivery struct {
 	logger     *zap.Logger
-	apnsClient *apns2.Client
+	apnsClient apnsSender
 	opts       options.ApnsOptions
 }
 
@@ -63,6 +105,13 @@ func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 	notification := a.buildNotification(req)
 
 	res, err := a.apnsClient.PushWithContext(ctx, notification)
+	if err != nil {
+		return err
+	}
+	if err = classifyApnsResponse(res); err != nil {
+		a.logger.Warn("APNs notification rejected", zap.Error(err))
+		return err
+	}
 	if res != nil {
 		a.logger.Info(
 			"Sent notification",
@@ -72,7 +121,7 @@ func (a ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) erro
 		)
 	}
 
-	return err
+	return nil
 }
 
 func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notification {
@@ -82,6 +131,9 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 		Custom("messageKind", string(req.MessageContext.MessageType)).
 		Custom("payloadFormat", req.PayloadFormat.String())
 
+	if req.IdempotencyKey != "" {
+		notificationPayload = notificationPayload.Custom("notification_id", req.IdempotencyKey)
+	}
 	if req.TopicBytesB64 != "" {
 		notificationPayload = notificationPayload.Custom("topicBytesB64", req.TopicBytesB64)
 	}
@@ -94,7 +146,12 @@ func (a ApnsDelivery) buildNotification(req interfaces.SendRequest) *apns2.Notif
 			MutableContent()
 	}
 
+	notificationID := ""
+	if req.IdempotencyKey != "" {
+		notificationID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(req.IdempotencyKey+"|"+req.Installation.Id)).String()
+	}
 	return &apns2.Notification{
+		ApnsID:      notificationID,
 		DeviceToken: req.Installation.DeliveryMechanism.Token,
 		Topic:       a.opts.Topic,
 		Payload:     notificationPayload,

@@ -2,13 +2,20 @@ package delivery
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
 	"github.com/stretchr/testify/require"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	"github.com/xmtp/example-notification-server-go/pkg/topics"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const deliveryTestTopic = "/xmtp/mls/1/g-24ce39d660600b3a98adff3075b6d1f4/proto"
@@ -80,4 +87,148 @@ func Test_ApnsDelivery_BuildNotification_V4TopicBytesB64(t *testing.T) {
 	require.Equal(t, deliveryTestTopic, p["topic"])
 	require.Equal(t, req.TopicBytesB64, p["topicBytesB64"])
 	require.Equal(t, "v4", p["payloadFormat"])
+}
+
+type fakeApnsSender struct {
+	response *apns2.Response
+	err      error
+}
+
+func (s fakeApnsSender) PushWithContext(apns2.Context, *apns2.Notification) (*apns2.Response, error) {
+	return s.response, s.err
+}
+
+func TestApns_SendRejectsProviderFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		status             int
+		reason             string
+		permanent, invalid bool
+	}{
+		{"unregistered", 410, "Unregistered", true, true},
+		{"bad_token", 400, "BadDeviceToken", true, true},
+		{"wrong_topic", 400, "DeviceTokenNotForTopic", true, false},
+		{"malformed_payload", 400, "BadPriority", true, false},
+		{"credentials", 403, "InvalidProviderToken", false, false},
+		{"missing_credentials", 403, "MissingProviderToken", false, false},
+		{"bad_certificate", 403, "BadCertificate", false, false},
+		{"forbidden", 403, "Forbidden", false, false},
+		{"expired_credentials", 403, "ExpiredProviderToken", false, false},
+		{"rate_limit", 429, "TooManyRequests", false, false},
+		{"server_error", 500, "InternalServerError", false, false},
+		{"unavailable", 503, "ServiceUnavailable", false, false},
+		{"unexpected_redirect", 302, "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, observed := observer.New(zap.InfoLevel)
+			a := ApnsDelivery{logger: zap.New(core), apnsClient: fakeApnsSender{response: &apns2.Response{StatusCode: tc.status, Reason: tc.reason}}}
+			err := a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3))
+			var rejection *ApnsRejection
+			require.ErrorAs(t, err, &rejection)
+			require.Equal(t, tc.permanent, rejection.Permanent)
+			require.Equal(t, tc.invalid, rejection.InvalidToken)
+			require.Empty(t, observed.FilterMessage("Sent notification").All())
+		})
+	}
+}
+
+func TestApns_SendRequiresAcknowledgement(t *testing.T) {
+	transportError := errors.New("network unavailable")
+	for _, tc := range []struct {
+		name     string
+		response *apns2.Response
+		err      error
+		success  bool
+	}{
+		{"accepted", &apns2.Response{StatusCode: http.StatusOK}, nil, true},
+		{"missing_response", nil, nil, false},
+		{"transport", nil, transportError, false},
+		{"response_with_transport_error", &apns2.Response{StatusCode: http.StatusOK}, transportError, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, observed := observer.New(zap.InfoLevel)
+			a := ApnsDelivery{logger: zap.New(core), apnsClient: fakeApnsSender{response: tc.response, err: tc.err}}
+			err := a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3))
+			if tc.success {
+				require.NoError(t, err)
+				require.Len(t, observed.FilterMessage("Sent notification").All(), 1)
+			} else {
+				require.Error(t, err)
+				require.Empty(t, observed.FilterMessage("Sent notification").All())
+			}
+			if tc.err != nil {
+				require.ErrorIs(t, err, transportError)
+			}
+		})
+	}
+}
+
+// Exercise the pinned provider client: APNs rejection is a response with nil
+// transport error, exactly the behavior the old adapter treated as success.
+func TestApns_RealClientRejectionIsNotAcknowledged(t *testing.T) {
+	for _, status := range []int{200, 410, 429, 500, 503} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "POST", r.Method)
+				require.Equal(t, "/3/device/device-token", r.URL.Path)
+				w.Header().Set("apns-id", "test-receipt")
+				w.WriteHeader(status)
+				if status != 200 {
+					_, _ = w.Write([]byte(`{"reason":"test-rejection"}`))
+				}
+			}))
+			defer server.Close()
+			core, observed := observer.New(zap.InfoLevel)
+			client := &apns2.Client{Host: server.URL, HTTPClient: server.Client()}
+			a := ApnsDelivery{logger: zap.New(core), apnsClient: client}
+			err := a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3))
+			if status == 200 {
+				require.NoError(t, err)
+				require.Len(t, observed.FilterMessage("Sent notification").All(), 1)
+			} else {
+				require.Error(t, err)
+				require.Empty(t, observed.FilterMessage("Sent notification").All())
+			}
+		})
+	}
+}
+
+func TestApns_PreservesInvalidationTimestamp(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	var rejection *ApnsRejection
+	err := classifyApnsResponse(&apns2.Response{StatusCode: 410, Reason: "Unregistered", Timestamp: apns2.Time{Time: at}})
+	require.ErrorAs(t, err, &rejection)
+	require.Equal(t, at, rejection.UnregisteredAt)
+}
+
+func TestApns_RetryRetainsNotificationIdentity(t *testing.T) {
+	a := ApnsDelivery{opts: options.ApnsOptions{Topic: "com.example.app"}}
+	req := buildDeliveryRequest(t, interfaces.PayloadFormatV3)
+	req.IdempotencyKey = "message-key"
+	req.Installation.Id = "first-device"
+	first := a.buildNotification(req)
+	require.NotEmpty(t, first.ApnsID)
+	require.Equal(t, first.ApnsID, a.buildNotification(req).ApnsID)
+	payloadBytes, err := first.Payload.(*payload.Payload).MarshalJSON()
+	require.NoError(t, err)
+	var value map[string]interface{}
+	require.NoError(t, json.Unmarshal(payloadBytes, &value))
+	require.Equal(t, req.IdempotencyKey, value["notification_id"])
+	req.Installation.Id = "other-device"
+	require.NotEqual(t, first.ApnsID, a.buildNotification(req).ApnsID)
+}
+
+func TestApns_RealTopicMismatchPreservesRegistration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"reason":"DeviceTokenNotForTopic"}`))
+	}))
+	defer server.Close()
+	client := &apns2.Client{Host: server.URL, HTTPClient: server.Client()}
+	a := ApnsDelivery{logger: zap.NewNop(), apnsClient: client}
+	err := a.Send(t.Context(), buildDeliveryRequest(t, interfaces.PayloadFormatV3))
+	var rejection *ApnsRejection
+	require.ErrorAs(t, err, &rejection)
+	require.True(t, rejection.Permanent, "do not retry this notification with the same topic")
+	require.False(t, rejection.InvalidToken, "a topic mismatch must not retire the device registration")
 }

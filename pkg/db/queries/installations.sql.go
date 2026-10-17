@@ -14,10 +14,10 @@ import (
 )
 
 const getLatestInstallations = `-- name: GetLatestInstallations :many
-SELECT ddm.id, ddm.installation_id, ddm.kind, ddm.token, ddm.created_at, ddm.updated_at, i.payload_format
+SELECT ddm.id, ddm.installation_id, ddm.kind, ddm.token, ddm.created_at, ddm.updated_at, ddm.registration_version, i.payload_format
 FROM installations i
 JOIN LATERAL (
-    SELECT d.id, d.installation_id, d.kind, d.token, d.created_at, d.updated_at
+    SELECT d.id, d.installation_id, d.kind, d.token, d.created_at, d.updated_at, d.invalidated_at, d.registration_version
     FROM device_delivery_mechanisms d
     WHERE d.installation_id = i.id
     ORDER BY d.updated_at DESC, d.id DESC
@@ -25,17 +25,19 @@ JOIN LATERAL (
 ) ddm ON TRUE
 WHERE i.id = ANY($1::text[])
   AND i.deleted_at IS NULL
+  AND ddm.invalidated_at IS NULL
 ORDER BY i.id DESC
 `
 
 type GetLatestInstallationsRow struct {
-	ID             int64
-	InstallationID string
-	Kind           string
-	Token          string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	PayloadFormat  int16
+	ID                  int64
+	InstallationID      string
+	Kind                string
+	Token               string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	RegistrationVersion int64
+	PayloadFormat       int16
 }
 
 func (q *Queries) GetLatestInstallations(ctx context.Context, installationIds []string) ([]GetLatestInstallationsRow, error) {
@@ -54,6 +56,7 @@ func (q *Queries) GetLatestInstallations(ctx context.Context, installationIds []
 			&i.Token,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RegistrationVersion,
 			&i.PayloadFormat,
 		); err != nil {
 			return nil, err
@@ -67,6 +70,39 @@ func (q *Queries) GetLatestInstallations(ctx context.Context, installationIds []
 		return nil, err
 	}
 	return items, nil
+}
+
+const invalidateDeliveryToken = `-- name: InvalidateDeliveryToken :exec
+UPDATE device_delivery_mechanisms
+SET invalidated_at = clock_timestamp()
+WHERE installation_id = $1
+  AND kind = $2
+  AND token = $3
+  AND updated_at = $4
+  AND registration_version = $5
+  AND ($6::timestamptz IS NULL
+       OR updated_at <= $6::timestamptz)
+`
+
+type InvalidateDeliveryTokenParams struct {
+	InstallationID              string
+	Kind                        string
+	Token                       string
+	ExpectedUpdatedAt           time.Time
+	ExpectedRegistrationVersion int64
+	InvalidBefore               sql.NullTime
+}
+
+func (q *Queries) InvalidateDeliveryToken(ctx context.Context, arg InvalidateDeliveryTokenParams) error {
+	_, err := q.db.ExecContext(ctx, invalidateDeliveryToken,
+		arg.InstallationID,
+		arg.Kind,
+		arg.Token,
+		arg.ExpectedUpdatedAt,
+		arg.ExpectedRegistrationVersion,
+		arg.InvalidBefore,
+	)
+	return err
 }
 
 const softDeleteInstallation = `-- name: SoftDeleteInstallation :exec
@@ -99,7 +135,8 @@ VALUES (
     COALESCE($4, clock_timestamp())
 )
 ON CONFLICT (installation_id, kind, token) DO UPDATE
-SET updated_at = EXCLUDED.updated_at
+SET updated_at = EXCLUDED.updated_at, invalidated_at = NULL,
+    registration_version = device_delivery_mechanisms.registration_version + 1
 `
 
 type UpsertDeviceDeliveryMechanismParams struct {

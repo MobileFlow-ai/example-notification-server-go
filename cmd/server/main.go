@@ -18,6 +18,7 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/installations"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/logging"
+	"github.com/xmtp/example-notification-server-go/pkg/notificationqueue"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	"github.com/xmtp/example-notification-server-go/pkg/subscriptions"
 	"github.com/xmtp/example-notification-server-go/pkg/xmtp"
@@ -90,15 +91,20 @@ func main() {
 			deliveryServices = append(deliveryServices, delivery.NewHttpDelivery(logger, opts.HttpDelivery))
 		}
 
+		if len(deliveryServices) == 0 {
+			logger.Fatal("listener requires at least one configured delivery provider")
+		}
+
 		switch opts.Xmtp.ListenerType {
 		case "v4":
-			notifListener, err = xmtp.NewV4Listener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion)
+			notifListener, err = xmtp.NewV4Listener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion, installationsService)
 		default: // "v3"
-			notifListener, err = xmtp.NewListener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion)
+			notifListener, err = xmtp.NewListener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion, installationsService)
 		}
 		if err != nil {
 			logger.Fatal("failed to initialize listener", zap.Error(err))
 		}
+		notifListener.SetNotificationQueue(notificationqueue.New(db, logger))
 		notifListener.Start()
 	}
 
