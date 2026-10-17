@@ -343,7 +343,7 @@ func sendA3RuntimeQARequest(
 	request.Header.Set("Accept", "application/json")
 	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
 	require.NoError(t, err)
-	defer response.Body.Close()
+	defer func() { require.NoError(t, response.Body.Close()) }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 16*1024+1))
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(responseBody), 16*1024)

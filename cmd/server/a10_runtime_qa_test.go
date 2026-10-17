@@ -264,7 +264,7 @@ func sendA10RuntimeQARequest(
 	client := &http.Client{Timeout: 5 * time.Second}
 	response, err := client.Do(request)
 	require.NoError(t, err)
-	defer response.Body.Close()
+	defer func() { require.NoError(t, response.Body.Close()) }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 64))
 	require.NoError(t, err)
 	return response.StatusCode, string(responseBody)

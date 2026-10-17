@@ -156,7 +156,7 @@ func (manager *KeysetManager) Refresh(ctx context.Context) error {
 	if err != nil {
 		return ErrKeysetUnavailable
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if response.StatusCode != http.StatusOK || mediaErr != nil ||
 		mediaType != "application/json" || response.Request == nil ||

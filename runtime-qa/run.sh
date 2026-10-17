@@ -58,14 +58,14 @@ compose exec -T db psql \
   > "$schema_result_file"
 cmp runtime-qa/expected/schema_migrations.txt "$schema_result_file"
 
-compose exec -T bridge sh -eu -c '
+compose exec -T bridge sh -eu <<'RUNTIME_QA_FLAGS'
   test "$APNS_ENABLED" = false
   test "$BRIDGE_A9_ENABLED" = false
   test "$BRIDGE_A10_REGISTRATION_ENABLED" = false
   test "$BRIDGE_A3_ASSOCIATION_ENABLED" = false
   test "$BRIDGE_A3_WITNESS_ENABLED" = false
   test "$BRIDGE_WELCOME_ENABLED" = false
-'
+RUNTIME_QA_FLAGS
 
 # The long-lived container remains dormant so runtime QA can never contact
 # APNS, XMTP, or an authority service. This explicit probe separately turns on

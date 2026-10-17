@@ -56,6 +56,20 @@ type HytchPushVaultA10RegistrationReplay struct {
 	ConsumedAt   time.Time
 }
 
+type HytchPushVaultA3DirectoryWitnessHead struct {
+	Environment      int16
+	TreeSize         int64
+	RootHash         []byte
+	PriorTreeSize    int64
+	PriorRootHash    []byte
+	TimestampMs      int64
+	CanonicalHead    []byte
+	ConsistencyProof []byte
+	WitnessKeyID     string
+	WitnessSignature []byte
+	AcceptedAt       time.Time
+}
+
 type HytchPushVaultA9AcceptedKeyset struct {
 	Environment      int16
 	KeysetSequence   int64

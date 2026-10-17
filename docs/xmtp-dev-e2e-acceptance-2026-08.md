@@ -1,5 +1,28 @@
 # XMTP dev-loop acceptance evidence — August 2026
 
+## 2026-10-15 source-state correction
+
+This correction is pinned to main `3caaa4d2`. The historical assertion/Gate-6
+lease equality defect was repaired by `967c828` (included in this main).
+Currentness keeps the roster-lease and bridge-lease namespaces separate and
+checks the route's exact assertion and authority provenance. The opt-in vault
+fixture exercises accepted control, watermark and replacement without forcing
+matching lease IDs; it uses verified objects and a trust stub, so it does not
+prove authenticated private ingress or deployed delivery.
+
+Current source also permits APNS startup under the complete dev-only A9/A10
+secure configuration introduced by `c3cf528`; `APNS_ENABLED=true` alone fails
+closed. The authoritative predicates are `apnsRuntimeConfigurationValid`,
+`a9RuntimeConfigurationValid` and `a10RuntimeConfigurationValid` in
+`cmd/server/main.go`, followed by the secure database and startup gates.
+This source support does not authorize credentials, provider calls, activation,
+migration retirement or deployment. Keep the audit configuration's APNS and A9
+flags off. Welcome remains compiled hard-closed. Actual deployed activation,
+private-ingress integration and provider/device acceptance remain unverified.
+
+The August records below retain their original outcomes. They are historical
+evidence, not a current-main failure claim or deployment authorization.
+
 **Status: NOT ACCEPTED — deployment remains blocked.**
 
 This is the Phase 3 local evidence packet for the XMTP development loop. It
@@ -28,13 +51,13 @@ changed for this packet.
 | Directory challenge recovery | Owner resets a failed challenge; a different session/incarnation is rejected and leaves state unchanged | PASS | Service-level fake DB/adapter; `requeue_failed_challenge` has no HTTP route |
 | Receipt issuance | HSM-shaped receipt issue and same-principal replay produce one persisted operation; conflicting session/signature is rejected | PASS | Service-level SQLite/fake-trust test; no live remote HSM or mounted HTTP router |
 | Bridge push policy | Historical evidence at migration `13|false`, serial `go test -p 1 ./...`, and payload-free Gate-6 verifier | PASS (historical) | Current source advances the bridge schema to `14|false`; this older API-only V4 run is not evidence for the new A3 surfaces. No XMTP listener, A9 private ingress, A10 route, A3 route, APNS, or device delivery was exercised. |
-| Bridge A9 route currentness | Disposable bridge vault: `TestA9RoutingWithLeaseReturnsExactSnapshot` returns zero subscriptions after accepted control, watermark, and replacement | FAIL | `a9_current` requires the assertion lease ID to equal the A9 route's Gate-6 lease ID. `Replace` obtains that route lease from Gate-6 refresh, whose new-lease path generates it independently; the replacement request does not carry an assertion lease ID. L4 did not force matching test randomness, because that would hide a real fail-closed join. |
+| Bridge A9 route currentness (historical August 4 failure; repaired in current main) | Disposable bridge vault: `TestA9RoutingWithLeaseReturnsExactSnapshot` returns zero subscriptions after accepted control, watermark, and replacement | FAIL | `a9_current` requires the assertion lease ID to equal the A9 route's Gate-6 lease ID. `Replace` obtains that route lease from Gate-6 refresh, whose new-lease path generates it independently; the replacement request does not carry an assertion lease ID. L4 did not force matching test randomness, because that would hide a real fail-closed join. |
 | Historical migration diagnostic | `rechain/985` reported `245_web_analytics_counters` and `250_xmtp_receipt_issuance_operations`; `alembic upgrade head` rejected multiple heads | FAIL (historical) | The later candidate below replaces this as the current migration evidence, not as an E2E acceptance |
 | Modern-api migration gate | Detached `fc91e067`: `alembic heads` and `alembic current` both report `253_xmtp_recovery_capsule_authority`; `alembic upgrade head` succeeds | PASS | Applied only to the disposable L4 Postgres; no Railway or shared database was touched |
 | Modern-api HTTP surface | Loopback Uvicorn at detached `fc91e067` fails the opt-in OpenAPI test on directory challenge and provenance receipt routes | FAIL | `app.main` mounts only the authority router; directory and provenance are present but not registered |
 | Positive A9 HTTP authority | Not runnable | BLOCKED | Router uses `UnavailableXMTPProductConversationAuthorizer`, returning fail-closed `xmtp_product_authority_unavailable` |
 | Positive receipt HTTP issuance | Not runnable | BLOCKED | Provenance router is unmounted and its default trust dependency is unavailable |
-| Positive bridge A9 → push → APNS loop | Not runnable | BLOCKED / FAIL | No checked-in compose combines secure vault, private TLS/JWS ingress, V4 listener, A9, and a permitted observable delivery boundary; APNS is hard-disabled. Independently, the local database A9 route-currentness check above fails before durable queueing. The legacy HTTP-observer integration is non-A9 and would tear down an in-use global `xnet` network / require a global `xnet-cli` install, so it is not a safe substitute |
+| Positive bridge A9 → push → APNS loop (historical August 4 evidence) | Not runnable | BLOCKED / FAIL | No checked-in compose combines secure vault, private TLS/JWS ingress, V4 listener, A9, and a permitted observable delivery boundary; APNS is hard-disabled. Independently, the local database A9 route-currentness check above fails before durable queueing. The legacy HTTP-observer integration is non-A9 and would tear down an in-use global `xnet` network / require a global `xnet-cli` install, so it is not a safe substitute |
 
 ### Commands run locally
 
@@ -45,7 +68,7 @@ BRIDGE_TEST_DSN='<local bridge_runtime_qa DSN>' \
   go test -buildvcs=false -mod=readonly -p 1 -count=1 ./...
 
 # Direct A9 vault-routing diagnostic against a test database in that same
-# disposable Compose lane. Current bridge head fails at `require.Len(..., 1)`
+# disposable Compose lane. The recorded August 4 bridge head failed at `require.Len(..., 1)`
 # because route currentness returns no subscription.
 VAULT_INTEGRATION_TESTS=1 \
   BRIDGE_TEST_DSN='<local bridge_runtime_qa DSN>' \
@@ -110,19 +133,20 @@ existing global `xnet` network and install its pinned `xnet-cli` when absent.
 L4 did not disrupt that external local state or install a global tool; neither
 action would prove the secure A9 path in any case.
 
-### Bridge A9 routing diagnostic (still not accepted)
+### Historical August 4 bridge A9 routing diagnostic (source defect since fixed)
 
-The dedicated local Postgres check also exposed a bridge-side fail-closed
-condition that prevents normal A9 route discovery and therefore normal durable
-delivery-job creation. The replacement path stores the Gate-6 lease ID
+The August 4 local Postgres check exposed a bridge-side fail-closed condition
+that prevented A9 route discovery and durable delivery-job creation at that
+recorded revision. Commit `967c828`, included in main `3caaa4d2`, fixes the
+namespace comparison; the diagnostic below is preserved as historical evidence. The replacement path stores the Gate-6 lease ID
 returned by `applyGate6RefreshTx` in
 `a9_subscription_routes`, while `loadA9CurrentAssertionTx` requires that same
 route lease ID to equal the accepted assertion's lease ID. A new Gate-6 lease
 is generated by `upsertLease`; no assertion lease ID is present in the
 replacement request to establish the required identity. The existing opt-in
 `TestA9RoutingWithLeaseReturnsExactSnapshot` reproduced the result locally as
-an empty subscription set (`[]`, expected one). This is an inference from the
-current source plus that test result; L4 made no stack edit and did not
+an empty subscription set (`[]`, expected one). This was an inference from the
+recorded August source plus that test result; L4 made no stack edit and did not
 manufacture matching test randomness to bypass it.
 
 ## Required handoff to XMTP-LANDING-TRAIN
@@ -136,9 +160,9 @@ end-to-end acceptance, L2 must publish a stable merge-preview that:
    OpenAPI paths from the running stack;
 3. wires a real product authority and directory/provenance runtime adapters,
    the corresponding HTTP routers under their explicit dark-by-default gates.
-4. repairs the bridge A9 assertion/Gate-6 lease-identity contract, then
-   demonstrates current A9 route discovery and pre-egress delivery using a
-   real lane-isolated database without a test-only lease-ID override.
+4. retains the landed `967c828` lease-namespace repair and demonstrates
+   current A9 route discovery and pre-egress delivery on the final composed
+   runtime in a lane-isolated database, without a test-only lease-ID override.
 
 The known #988 `.claude/scratch/` contamination must also be removed from its
 history before the train can be accepted. The detached `fc91e067` rerun did
