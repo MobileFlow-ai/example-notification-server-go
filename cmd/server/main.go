@@ -25,6 +25,7 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/installations"
 	"github.com/xmtp/example-notification-server-go/pkg/interfaces"
 	"github.com/xmtp/example-notification-server-go/pkg/logging"
+	"github.com/xmtp/example-notification-server-go/pkg/notificationqueue"
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	"github.com/xmtp/example-notification-server-go/pkg/registration"
 	"github.com/xmtp/example-notification-server-go/pkg/subscriptions"
@@ -495,14 +496,30 @@ func runServer() {
 			deliveryServices = append(deliveryServices, delivery.NewHttpDelivery(logger, opts.HttpDelivery))
 		}
 
+		// Secure vault mode keeps routing state inside hytch_push_vault and
+		// persists per-recipient delivery in its own encrypted job store. The
+		// durable envelope queue and plaintext token versions live in public
+		// tables that the restricted runtime role is never granted, and queued
+		// envelopes would expose which topics have subscribers, so both are
+		// wired only for the plaintext listener path.
+		var tokenInvalidators []interfaces.TokenInvalidator
+		if !opts.Vault.Enabled {
+			if invalidator, ok := installationsService.(interfaces.TokenInvalidator); ok {
+				tokenInvalidators = append(tokenInvalidators, invalidator)
+			}
+		}
+
 		switch opts.Xmtp.ListenerType {
 		case "v4":
-			notifListener, err = xmtp.NewV4Listener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion)
+			notifListener, err = xmtp.NewV4Listener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion, tokenInvalidators...)
 		default: // "v3"
-			notifListener, err = xmtp.NewListener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion)
+			notifListener, err = xmtp.NewListener(ctx, logger, opts.Xmtp, installationsService, subscriptionsService, deliveryServices, clientVersion, appVersion, tokenInvalidators...)
 		}
 		if err != nil {
 			logger.Fatal("failed to initialize listener")
+		}
+		if !opts.Vault.Enabled {
+			notifListener.SetNotificationQueue(notificationqueue.New(db, logger))
 		}
 	}
 

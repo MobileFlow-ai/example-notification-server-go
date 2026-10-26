@@ -2,6 +2,7 @@ package xmtp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/xmtp/xmtpd/pkg/topic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type V4Listener struct {
@@ -42,6 +44,9 @@ type V4Listener struct {
 	failed           chan struct{}
 	failedOnce       sync.Once
 	retryWindow      time.Duration
+	queue            interfaces.NotificationQueue
+	admissionReady   atomic.Bool
+	queueHealth      atomic.Pointer[durableWorkerHealth]
 }
 
 func NewV4Listener(
@@ -53,6 +58,7 @@ func NewV4Listener(
 	deliveryServices []interfaces.Delivery,
 	clientVersion string,
 	appVersion string,
+	invalidators ...interfaces.TokenInvalidator,
 ) (*V4Listener, error) {
 	client, conn, err := NewV4Client(ctx, opts.GrpcAddress, opts.UseTls, clientVersion, appVersion)
 	if err != nil {
@@ -74,14 +80,23 @@ func NewV4Listener(
 		subscriptions:   subscriptions,
 		clientVersion:   clientVersion,
 		appVersion:      appVersion,
-		dispatcher:      newDeliveryDispatcher(ctx, deliveryServices),
+		dispatcher:      newDeliveryDispatcher(ctx, deliveryServices, invalidators...),
 		failed:          make(chan struct{}),
 	}, nil
 }
 
 func (l *V4Listener) Start() {
-	go runListenerGoroutine(l.startEnvelopeListener, l.failClosed)
+	// Workers start first so durable queue health exists before admission.
 	l.startEnvelopeWorkers()
+	go runListenerGoroutine(l.startEnvelopeListener, l.failClosed)
+}
+
+// SetNotificationQueue enables durable admission: each relevant received
+// envelope is persisted before any worker sees it. Call it before Start.
+func (l *V4Listener) SetNotificationQueue(queue interfaces.NotificationQueue) {
+	l.queue = queue
+	l.dispatcher.queue = queue
+	l.admissionReady.Store(true)
 }
 
 func (l *V4Listener) Stop() {
@@ -98,7 +113,9 @@ func (l *V4Listener) Stop() {
 func (l *V4Listener) Ready() bool {
 	return l.ready.Load() &&
 		l.processing.Load() == 0 &&
-		!l.processingUnsafe.Load()
+		!l.processingUnsafe.Load() &&
+		(l.queue == nil ||
+			(l.admissionReady.Load() && l.queueHealth.Load().Ready()))
 }
 
 func (l *V4Listener) Failed() <-chan struct{} {
@@ -180,6 +197,12 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 			if resp != nil {
 				*sleepTime = STARTING_SLEEP_TIME
 				for _, env := range resp.GetEnvelopes() {
+					if l.queue != nil {
+						if !l.admitEnvelope(env) {
+							return true
+						}
+						continue
+					}
 					select {
 					case l.envelopeChannel <- env:
 					case <-l.ctx.Done():
@@ -191,7 +214,54 @@ func (l *V4Listener) consumeEnvelopeStream(stream notificationApi.NotificationAp
 	}
 }
 
+// admitEnvelope persists a received envelope for a subscribed topic.
+// Envelopes the processing path would drop anyway are skipped without a
+// database write. It returns false only when the listener is stopping.
+func (l *V4Listener) admitEnvelope(env *envelopesProto.OriginatorEnvelope) bool {
+	orig, err := envelopes.NewOriginatorEnvelope(env)
+	if err != nil {
+		// Invalid external envelopes are dropped, as in processing.
+		return true
+	}
+	target := orig.UnsignedOriginatorEnvelope.PayerEnvelope.ClientEnvelope.TargetTopic()
+	if target.Kind() == topic.TopicKindWelcomeMessagesV1 {
+		if _, supported := l.subscriptions.(interfaces.WelcomeSubscriptions); !supported {
+			return true
+		}
+	} else {
+		thirtyDayPeriod := int(orig.OriginatorNs() / 1_000_000_000 / 60 / 60 / 24 / 30)
+		known, live := waitForKnownSubscriptions(l.ctx, &l.admissionReady, l.logger, func(ctx context.Context) (bool, error) {
+			subs, err := l.subscriptions.GetSubscriptions(ctx, &target, thirtyDayPeriod)
+			return len(subs) > 0, err
+		})
+		if !live {
+			return false
+		}
+		if !known {
+			return true
+		}
+	}
+	payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(env)
+	if err != nil {
+		// An envelope that cannot be re-encoded can never be admitted; skip
+		// it rather than stopping the listener.
+		l.logDependencyFailure()
+		return true
+	}
+	return persistEnvelope(l.ctx, l.queue, "v4", buildV4IdempotencyKey(orig), payload, &l.admissionReady, l.logger)
+}
+
 func (l *V4Listener) startEnvelopeWorkers() {
+	if l.queue != nil {
+		l.queueHealth.Store(startDurableWorkers(l.ctx, l.queue, "v4", l.opts.NumWorkers, l.logger, l.failClosed, func(ctx context.Context, raw []byte) error {
+			env := &envelopesProto.OriginatorEnvelope{}
+			if err := proto.Unmarshal(raw, env); err != nil {
+				return &invalidEnvelopeError{cause: err}
+			}
+			return l.processOriginatorEnvelopeContext(ctx, env)
+		}))
+		return
+	}
 	for i := 0; i < l.opts.NumWorkers; i++ {
 		go runListenerGoroutine(
 			func() {
@@ -238,6 +308,9 @@ func (l *V4Listener) processOriginatorEnvelopeContext(
 	ctx context.Context,
 	env *envelopesProto.OriginatorEnvelope,
 ) error {
+	if env == nil {
+		return errors.New("missing V4 envelope")
+	}
 	origEnv, err := envelopes.NewOriginatorEnvelope(env)
 	if err != nil {
 		//nolint:nilerr // Invalid external envelopes are intentionally dropped.
@@ -285,7 +358,7 @@ func (l *V4Listener) processOriginatorEnvelopeContext(
 		installationMap[inst.Id] = inst
 	}
 
-	var firstError error
+	requests := make([]interfaces.SendRequest, 0, len(subs))
 	for _, sub := range subs {
 		inst, exists := installationMap[sub.InstallationId]
 		if !exists {
@@ -302,7 +375,14 @@ func (l *V4Listener) processOriginatorEnvelopeContext(
 		if err != nil {
 			continue
 		}
+		requests = append(requests, req)
+	}
+	if err = l.dispatcher.prepareRecipients(ctx, requests); err != nil {
+		return err
+	}
 
+	var firstError error
+	for _, req := range requests {
 		if err = l.dispatcher.dispatchContext(
 			ctx,
 			req,
@@ -343,7 +423,7 @@ func (l *V4Listener) processWelcomeOriginatorEnvelopeContext(
 		return err
 	}
 	idempotencyKey := buildV4IdempotencyKey(origEnv)
-	var firstError error
+	requests := make([]interfaces.SendRequest, 0, len(routes))
 	for _, route := range routes {
 		var request interfaces.SendRequest
 		switch route.Installation.PayloadFormat {
@@ -369,6 +449,13 @@ func (l *V4Listener) processWelcomeOriginatorEnvelopeContext(
 		if err != nil {
 			continue
 		}
+		requests = append(requests, request)
+	}
+	if err = l.dispatcher.prepareRecipients(ctx, requests); err != nil {
+		return err
+	}
+	var firstError error
+	for _, request := range requests {
 		if err = l.dispatcher.dispatchContext(
 			ctx,
 			request,

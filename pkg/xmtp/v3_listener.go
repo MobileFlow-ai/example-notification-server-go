@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	topicpkg "github.com/xmtp/xmtpd/pkg/topic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type Listener struct {
@@ -42,6 +44,9 @@ type Listener struct {
 	failed           chan struct{}
 	failedOnce       sync.Once
 	retryWindow      time.Duration
+	queue            interfaces.NotificationQueue
+	admissionReady   atomic.Bool
+	queueHealth      atomic.Pointer[durableWorkerHealth]
 }
 
 func NewListener(
@@ -53,6 +58,7 @@ func NewListener(
 	deliveryServices []interfaces.Delivery,
 	clientVersion string,
 	appVersion string,
+	invalidators ...interfaces.TokenInvalidator,
 ) (*Listener, error) {
 	client, conn, err := NewClientWithConn(
 		ctx,
@@ -80,14 +86,23 @@ func NewListener(
 		subscriptions:  subscriptions,
 		clientVersion:  clientVersion,
 		appVersion:     appVersion,
-		dispatcher:     newDeliveryDispatcher(ctx, deliveryServices),
+		dispatcher:     newDeliveryDispatcher(ctx, deliveryServices, invalidators...),
 		failed:         make(chan struct{}),
 	}, nil
 }
 
 func (l *Listener) Start() {
-	go runListenerGoroutine(l.startMessageListener, l.failClosed)
+	// Workers start first so durable queue health exists before admission.
 	l.startMessageWorkers()
+	go runListenerGoroutine(l.startMessageListener, l.failClosed)
+}
+
+// SetNotificationQueue enables durable admission: each relevant received
+// frame is persisted before any worker sees it. Call it before Start.
+func (l *Listener) SetNotificationQueue(queue interfaces.NotificationQueue) {
+	l.queue = queue
+	l.dispatcher.queue = queue
+	l.admissionReady.Store(true)
 }
 
 func (l *Listener) Stop() {
@@ -104,7 +119,9 @@ func (l *Listener) Stop() {
 func (l *Listener) Ready() bool {
 	return l.ready.Load() &&
 		l.processing.Load() == 0 &&
-		!l.processingUnsafe.Load()
+		!l.processingUnsafe.Load() &&
+		(l.queue == nil ||
+			(l.admissionReady.Load() && l.queueHealth.Load().Ready()))
 }
 
 func (l *Listener) Failed() <-chan struct{} {
@@ -188,6 +205,12 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 			if msg != nil {
 				// Reset the sleep time on first successful message
 				*sleepTime = STARTING_SLEEP_TIME
+				if l.queue != nil {
+					if !l.admitEnvelope(msg) {
+						return true
+					}
+					continue
+				}
 				select {
 				case l.messageChannel <- msg:
 				case <-l.ctx.Done():
@@ -198,7 +221,54 @@ func (l *Listener) consumeMessageStream(stream v1.MessageApi_SubscribeAllClient,
 	}
 }
 
+// admitEnvelope persists a received frame for a subscribed topic. Frames
+// the processing path would drop anyway are skipped without a database write.
+// It returns false only when the listener is stopping.
+func (l *Listener) admitEnvelope(msg *v1.Envelope) bool {
+	if !strings.HasPrefix(msg.ContentTopic, topics.V3_PREFIX) {
+		return true
+	}
+	parsed, err := topics.ParseV3Topic(msg.ContentTopic)
+	if err != nil {
+		return true
+	}
+	if parsed.Kind() == topicpkg.TopicKindWelcomeMessagesV1 {
+		if _, supported := l.subscriptions.(interfaces.WelcomeSubscriptions); !supported {
+			return true
+		}
+	} else {
+		known, live := waitForKnownSubscriptions(l.ctx, &l.admissionReady, l.logger, func(ctx context.Context) (bool, error) {
+			subs, err := l.subscriptions.GetSubscriptions(ctx, parsed, getThirtyDayPeriodsFromEpoch(msg))
+			return len(subs) > 0, err
+		})
+		if !live {
+			return false
+		}
+		if !known {
+			return true
+		}
+	}
+	payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(msg)
+	if err != nil {
+		// A frame that cannot be re-encoded can never be admitted; skip it
+		// rather than stopping the listener.
+		l.logDependencyFailure()
+		return true
+	}
+	return persistEnvelope(l.ctx, l.queue, "v3", buildIdempotencyKey(msg), payload, &l.admissionReady, l.logger)
+}
+
 func (l *Listener) startMessageWorkers() {
+	if l.queue != nil {
+		l.queueHealth.Store(startDurableWorkers(l.ctx, l.queue, "v3", l.opts.NumWorkers, l.logger, l.failClosed, func(ctx context.Context, raw []byte) error {
+			env := &v1.Envelope{}
+			if err := proto.Unmarshal(raw, env); err != nil {
+				return &invalidEnvelopeError{cause: err}
+			}
+			return l.processEnvelopeContext(ctx, env)
+		}))
+		return
+	}
 	for i := 0; i < l.opts.NumWorkers; i++ {
 		go runListenerGoroutine(
 			func() {
@@ -245,6 +315,9 @@ func (l *Listener) processEnvelopeContext(
 	ctx context.Context,
 	env *v1.Envelope,
 ) error {
+	if env == nil {
+		return errors.New("missing V3 envelope")
+	}
 	// Fast-path: skip expensive parsing for topics that can't be V3
 	if !strings.HasPrefix(env.ContentTopic, topics.V3_PREFIX) {
 		return nil
@@ -283,6 +356,9 @@ func (l *Listener) processEnvelopeContext(
 	}
 
 	sendRequests := buildSendRequests(env, t, installations, subs)
+	if err = l.dispatcher.prepareRecipients(ctx, sendRequests); err != nil {
+		return err
+	}
 	var firstError error
 	for _, request := range sendRequests {
 		if err = l.dispatcher.dispatchContext(
@@ -319,9 +395,9 @@ func (l *Listener) processWelcomeEnvelopeContext(
 	}
 	idempotencyKey := buildIdempotencyKey(env)
 	messageContext := getContext(env, targetTopic)
-	var firstError error
+	requests := make([]interfaces.SendRequest, 0, len(routes))
 	for _, route := range routes {
-		request := interfaces.SendRequest{
+		requests = append(requests, interfaces.SendRequest{
 			IdempotencyKey:   idempotencyKey,
 			Topic:            topics.TopicToString(targetTopic),
 			EncryptedMessage: env.Message,
@@ -329,7 +405,13 @@ func (l *Listener) processWelcomeEnvelopeContext(
 			MessageContext:   messageContext,
 			Installation:     route.Installation,
 			Subscription:     route.Subscription,
-		}
+		})
+	}
+	if err = l.dispatcher.prepareRecipients(ctx, requests); err != nil {
+		return err
+	}
+	var firstError error
+	for _, request := range requests {
 		if err = l.dispatcher.dispatchContext(
 			ctx,
 			request,

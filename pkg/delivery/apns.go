@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/payload"
 	"github.com/sideshow/apns2/token"
@@ -157,8 +158,11 @@ func (a *ApnsDelivery) Send(ctx context.Context, req interfaces.SendRequest) err
 		return a.enqueueNotification(ctx, req, notification)
 	}
 
-	outcome := a.pushNotification(ctx, notification)
-	return apnsOutcomeError(outcome)
+	if a.apnsClient == nil {
+		return ErrAPNSRejected
+	}
+	response, err := a.apnsClient.PushWithContext(ctx, notification)
+	return apnsRejectionError(response, err)
 }
 
 func (a ApnsDelivery) buildNotification(
@@ -187,6 +191,9 @@ func (a ApnsDelivery) buildNotification(
 		)
 	}
 
+	if req.IdempotencyKey != "" {
+		notificationPayload = notificationPayload.Custom("notification_id", req.IdempotencyKey)
+	}
 	if req.TopicBytesB64 != "" {
 		notificationPayload = notificationPayload.Custom("topicBytesB64", req.TopicBytesB64)
 	}
@@ -203,7 +210,17 @@ func (a ApnsDelivery) buildNotification(
 			MutableContent()
 	}
 
+	// A stable apns-id per message and device lets a retried request carry
+	// the same identity, so consumers can deduplicate an uncertain retry.
+	notificationID := ""
+	if req.IdempotencyKey != "" {
+		notificationID = uuid.NewSHA1(
+			uuid.NameSpaceOID,
+			[]byte(req.IdempotencyKey+"|"+req.Installation.Id),
+		).String()
+	}
 	return &apns2.Notification{
+		ApnsID:      notificationID,
 		DeviceToken: req.Installation.DeliveryMechanism.Token,
 		Topic:       a.opts.Topic,
 		Payload:     notificationPayload,

@@ -53,10 +53,10 @@ interactive inspection, use `make runtime-qa-up` and finish with
 The harness verifies:
 
 - `/livez` returns `200 ok`;
-- `/readyz` returns `200 ok` after migration 00014 is applied;
+- `/readyz` returns `200 ok` after migrations through 00015 are applied;
 - `/health/xmtp` returns `503 xmtp_unavailable` because the QA bridge is
   intentionally API-only and does not activate an XMTP listener;
-- `schema_migrations` records version 14 with `dirty=false`;
+- `schema_migrations` records version 15 with `dirty=false`;
 - `APNS_ENABLED`, `BRIDGE_A9_ENABLED`,
   `BRIDGE_A10_REGISTRATION_ENABLED`, `BRIDGE_A3_ASSOCIATION_ENABLED`,
   `BRIDGE_A3_WITNESS_ENABLED`, and `BRIDGE_WELCOME_ENABLED` are all exactly

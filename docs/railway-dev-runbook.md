@@ -621,7 +621,8 @@ the owner is not sufficient to activate A10: the restricted runtime credential
 cannot use the four new tables until an operator performs this separate grant
 ceremony. Perform it only in the private migration job, with every bridge
 replica stopped, after independently verifying the dedicated dev database,
-clean `14|false` schema state, exact candidate image, and exact runtime role.
+clean current schema state (`15|false` once migration 00015 is applied), exact
+candidate image, and exact runtime role.
 It does not authorize mounting A10 or enabling APNS.
 
 In an owner `psql` session, set `runtime_role` to the already-created exact
@@ -758,6 +759,25 @@ triggers, owner separation, schema-migration read-only grant, and exact
 gate even when schema version is current.
 That source contract does not authorize running the ceremony, setting Railway
 variables, applying migration 00014, or deploying either route.
+
+## Migration 00015 notification delivery durability (plaintext path only)
+
+Migration 00015 adds `notification_envelopes` and
+`notification_recipient_receipts` and, only where the legacy
+`device_delivery_mechanisms` relation still exists, its `invalidated_at` and
+`registration_version` columns. On a retired secure-vault database the column
+change is skipped, so the migration applies and reverts cleanly there. Secure
+vault mode never wires the durable envelope queue or the plaintext token
+invalidator: they live in public tables the restricted runtime role is never
+granted, and queued envelopes would reveal which topics have subscribers. No
+grant ceremony is needed or permitted for these tables.
+
+Secure runtime startup never migrates, so an image that embeds 00015 fails the
+schema gate (`database schema gate failed`) against a database still at
+`14|false`. Before deploying such an image to the dev bridge, run the private
+migration job (`--migrate-only` with `MIGRATION_DB_CONNECTION_STRING`, bridge
+replicas stopped) from that exact image and verify `15|false` read-only, then
+deploy. Never down-migrate a live bridge database.
 
 ## Private incident-access contract
 

@@ -189,6 +189,8 @@ func resetSchema(t *testing.T, db *sql.DB) {
 
 	statements := []string{
 		"DROP SCHEMA IF EXISTS hytch_push_vault CASCADE",
+		"DROP TABLE IF EXISTS notification_recipient_receipts",
+		"DROP TABLE IF EXISTS notification_envelopes",
 		"DROP TABLE IF EXISTS schema_migrations",
 		"DROP TABLE IF EXISTS bun_migrations",
 		"DROP TABLE IF EXISTS subscription_hmac_keys",
@@ -218,4 +220,103 @@ func assertQualifiedRelationExists(t *testing.T, db *sql.DB, name string) {
 	err := db.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&exists)
 	require.NoError(t, err)
 	require.True(t, exists, name)
+}
+
+func assertRelationAbsent(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+
+	var absent bool
+	err := db.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NULL`, "public."+name).Scan(&absent)
+	require.NoError(t, err)
+	require.True(t, absent, name)
+}
+
+func assertSchemaVersion(t *testing.T, db *sql.DB, expected int) {
+	t.Helper()
+
+	var version int
+	var dirty bool
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT version, dirty FROM public.schema_migrations`,
+	).Scan(&version, &dirty))
+	require.Equal(t, expected, version)
+	require.False(t, dirty)
+}
+
+func assertDeliveryTokenVersionColumns(t *testing.T, db *sql.DB, expected int) {
+	t.Helper()
+
+	var count int
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*) FROM information_schema.columns
+		  WHERE table_schema = 'public'
+		    AND table_name = 'device_delivery_mechanisms'
+		    AND column_name IN ('invalidated_at', 'registration_version')`,
+	).Scan(&count))
+	require.Equal(t, expected, count)
+}
+
+// Migration 00015 lands on top of the secure schema at 00014. Existing
+// plaintext token rows keep their value and start at registration version 1.
+func TestNotificationDurability_UpgradesExistingV14(t *testing.T) {
+	db := testdb.CreateEmptyTestDb(t)
+	require.NoError(t, database.MigrateUpTo(t.Context(), db, 14))
+	assertSchemaVersion(t, db, 14)
+	_, err := db.ExecContext(t.Context(), "INSERT INTO installations(id) VALUES ('existing'); INSERT INTO device_delivery_mechanisms(installation_id,kind,token) VALUES ('existing','apns','kept-token')")
+	require.NoError(t, err)
+	require.NoError(t, database.Migrate(t.Context(), db))
+	assertSchemaVersion(t, db, 15)
+	require.NoError(t, database.RequireCurrentSchema(t.Context(), db))
+	var token string
+	var version int64
+	var invalidated sql.NullTime
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT token,registration_version,invalidated_at FROM device_delivery_mechanisms WHERE installation_id='existing'").Scan(&token, &version, &invalidated))
+	require.Equal(t, "kept-token", token)
+	require.Equal(t, int64(1), version)
+	require.False(t, invalidated.Valid)
+	assertRelationExists(t, db, "notification_envelopes")
+	assertRelationExists(t, db, "notification_recipient_receipts")
+	assertRelationExists(t, db, "notification_envelopes_terminal_created_idx")
+	require.NoError(t, database.Migrate(t.Context(), db))
+
+	// Down reverts exactly to 00014 and keeps the legacy row; up reapplies.
+	require.NoError(t, database.MigrateUpTo(t.Context(), db, 14))
+	assertSchemaVersion(t, db, 14)
+	assertRelationAbsent(t, db, "notification_envelopes")
+	assertRelationAbsent(t, db, "notification_recipient_receipts")
+	assertDeliveryTokenVersionColumns(t, db, 0)
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT token FROM device_delivery_mechanisms WHERE installation_id='existing'").Scan(&token))
+	require.Equal(t, "kept-token", token)
+	require.NoError(t, database.Migrate(t.Context(), db))
+	assertSchemaVersion(t, db, 15)
+	assertDeliveryTokenVersionColumns(t, db, 2)
+}
+
+// A secure-vault database has dropped the four legacy routing relations.
+// 00015 must still apply and revert there, or the migration job would leave
+// the schema dirty and the secure runtime's schema gate would never pass.
+func TestNotificationDurability_AppliesAndRevertsAfterLegacyRetirement(t *testing.T) {
+	db := testdb.CreateEmptyTestDb(t)
+	require.NoError(t, database.MigrateUpTo(t.Context(), db, 14))
+	activateLegacyRoutingRetirement(t, db)
+	assertRelationAbsent(t, db, "device_delivery_mechanisms")
+
+	require.NoError(t, database.Migrate(t.Context(), db))
+	assertSchemaVersion(t, db, 15)
+	require.NoError(t, database.RequireCurrentSchema(t.Context(), db))
+	assertRelationExists(t, db, "notification_envelopes")
+	assertRelationExists(t, db, "notification_recipient_receipts")
+	assertRelationAbsent(t, db, "device_delivery_mechanisms")
+
+	require.NoError(t, database.MigrateUpTo(t.Context(), db, 14))
+	assertSchemaVersion(t, db, 14)
+	assertRelationAbsent(t, db, "notification_envelopes")
+	assertRelationAbsent(t, db, "notification_recipient_receipts")
+	assertRelationAbsent(t, db, "device_delivery_mechanisms")
+
+	require.NoError(t, database.Migrate(t.Context(), db))
+	assertSchemaVersion(t, db, 15)
+	require.NoError(t, database.RequireCurrentSchema(t.Context(), db))
 }

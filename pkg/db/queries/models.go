@@ -12,12 +12,14 @@ import (
 )
 
 type DeviceDeliveryMechanism struct {
-	ID             int64
-	InstallationID string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	Kind           string
-	Token          string
+	ID                  int64
+	InstallationID      string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Kind                string
+	Token               string
+	InvalidatedAt       sql.NullTime
+	RegistrationVersion int64
 }
 
 type HytchPushVaultA10AcceptedKeyset struct {
@@ -500,6 +502,30 @@ type Installation struct {
 	CreatedAt     time.Time
 	DeletedAt     sql.NullTime
 	PayloadFormat int16
+}
+
+type NotificationEnvelope struct {
+	ID                 int64
+	Listener           string
+	MessageKey         string
+	Payload            []byte
+	Status             string
+	CreatedAt          time.Time
+	NextAttemptAt      time.Time
+	Attempts           int32
+	LeaseID            string
+	LeaseUntil         time.Time
+	FailureClass       string
+	RecipientsPrepared bool
+}
+
+type NotificationRecipientReceipt struct {
+	EnvelopeID     int64
+	InstallationID string
+	Status         string
+	LeaseID        string
+	LeaseUntil     time.Time
+	FailureClass   string
 }
 
 type Subscription struct {
