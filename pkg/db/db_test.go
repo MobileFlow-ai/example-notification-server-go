@@ -363,8 +363,10 @@ func TestNotificationDurability_NonSuperuserOwnerAfterLegacyRetirement(t *testin
 	t.Cleanup(func() { _ = migrator.Close() })
 
 	require.NoError(t, database.MigrateUpTo(t.Context(), migrator, 14))
-	// Runbook retirement step: revoke every named non-owner CREATE on public.
-	_, err = superuserDB.ExecContext(t.Context(), `REVOKE CREATE ON SCHEMA public FROM "`+role+`"`)
+	// Runbook retirement step 2: revoke every non-owner CREATE on public,
+	// including PostgreSQL 13's default PUBLIC grant, which a non-owner
+	// definer cannot revoke itself.
+	_, err = superuserDB.ExecContext(t.Context(), `REVOKE CREATE ON SCHEMA public FROM "`+role+`"; REVOKE CREATE ON SCHEMA public FROM PUBLIC`)
 	require.NoError(t, err)
 	activateLegacyRoutingRetirement(t, migrator)
 	var canCreateInPublic bool

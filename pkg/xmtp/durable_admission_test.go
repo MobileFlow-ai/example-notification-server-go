@@ -21,7 +21,6 @@ import (
 	notificationApi "github.com/xmtp/xmtpd/pkg/proto/xmtpv4/message_api"
 	"github.com/xmtp/xmtpd/pkg/topic"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 )
 
 const admissionTestGroupTopic = "/xmtp/mls/1/g-24ce39d660600b3a98adff3075b6d1f4/proto"
@@ -152,9 +151,7 @@ func v4QueueKey(t *testing.T, env *envelopesProto.OriginatorEnvelope) string {
 	t.Helper()
 	orig, err := envelopes.NewOriginatorEnvelope(env)
 	require.NoError(t, err)
-	payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(env)
-	require.NoError(t, err)
-	return buildV4QueueKey(orig, payload)
+	return buildV4QueueKey(orig, env)
 }
 
 // node:seq alone must not deduplicate different content: a network reset or

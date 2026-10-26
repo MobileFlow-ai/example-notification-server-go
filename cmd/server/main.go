@@ -498,10 +498,11 @@ func runServer() {
 
 		// Secure vault mode keeps routing state inside hytch_push_vault and
 		// persists per-recipient delivery in its own encrypted job store. The
-		// durable envelope queue and plaintext token versions live in public
-		// tables that the restricted runtime role is never granted, and queued
-		// envelopes would expose which topics have subscribers, so both are
-		// wired only for the plaintext listener path.
+		// durable envelope queue (schema notification_queue) and plaintext
+		// token versions live outside the vault, the restricted runtime role
+		// is never granted them, and queued envelopes would expose which
+		// topics have subscribers, so both are wired only for the plaintext
+		// listener path.
 		var tokenInvalidators []interfaces.TokenInvalidator
 		if !opts.Vault.Enabled {
 			// A durable plaintext listener without a provider would record

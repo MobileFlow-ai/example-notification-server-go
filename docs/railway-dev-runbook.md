@@ -968,8 +968,8 @@ unknown replica.
    an argument or printed.
 
    Require `preflight=pass` and record its safe boolean statuses plus the
-   JSON-escaped current database name. The preflight requires migration 11
-   clean, only its own client session, no logical subscription, no enabled
+   JSON-escaped current database name. The preflight requires the current
+   migration (15 since migration 00015) clean, only its own client session, no logical subscription, no enabled
    event trigger, all four exact owner-held legacy tables, an empty activation
    marker with exactly the non-null `singleton BOOLEAN` and
    `activated_at TIMESTAMPTZ` columns, the exact activation/rejection function

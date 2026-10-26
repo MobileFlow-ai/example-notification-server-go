@@ -250,16 +250,18 @@ func (l *V4Listener) admitEnvelope(env *envelopesProto.OriginatorEnvelope) bool 
 		l.logDependencyFailure()
 		return true
 	}
-	return persistEnvelope(l.ctx, l.queue, "v4", buildV4QueueKey(orig, payload), payload, &l.admissionReady, l.logger)
+	return persistEnvelope(l.ctx, l.queue, "v4", buildV4QueueKey(orig, env), payload, &l.admissionReady, l.logger)
 }
 
 // buildV4QueueKey deduplicates stream replays of the same envelope. The
 // originator node and sequence alone are not enough: a network reset or a
 // re-provisioned node can reuse them for different content, which must not
-// be silently dropped as a duplicate. The notification identity sent to
+// be silently dropped as a duplicate. The digest covers the signed unsigned
+// originator envelope bytes exactly as received, so it does not depend on
+// this binary's protobuf definitions. The notification identity sent to
 // providers stays buildV4IdempotencyKey.
-func buildV4QueueKey(env *envelopes.OriginatorEnvelope, payload []byte) string {
-	digest := sha256.Sum256(payload)
+func buildV4QueueKey(env *envelopes.OriginatorEnvelope, raw *envelopesProto.OriginatorEnvelope) string {
+	digest := sha256.Sum256(raw.GetUnsignedOriginatorEnvelope())
 	return buildV4IdempotencyKey(env) + ":" + hex.EncodeToString(digest[:16])
 }
 

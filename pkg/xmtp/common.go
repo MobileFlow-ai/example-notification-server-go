@@ -170,10 +170,11 @@ func (d *deliveryDispatcher) dispatchContext(
 
 // finishRecipient persists one recipient outcome under the envelope and
 // recipient leases. It uses its own deadline rather than the completed
-// provider timeout, and it is not cancelled by listener shutdown: a provider
-// acceptance that lands while the process stops is still recorded, so a
-// restart does not resend it. The leases still fence the write. A failed
-// write leaves the outcome uncertain, so the recipient stays pending and the
+// provider timeout, and listener cancellation does not abort it, so an
+// acceptance that completed just before Stop is still written while the
+// process is alive. Stop does not wait for workers, so process exit can
+// still interrupt the write. The leases fence it either way. A failed write
+// leaves the outcome uncertain, so the recipient stays pending and the
 // envelope retries.
 func (d *deliveryDispatcher) finishRecipient(
 	baseContext context.Context,
