@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -41,6 +42,12 @@ func (o apnsOutcome) transient() bool {
 		o == apnsOutcomeTransientServer
 }
 
+// classifyAPNSResponse maps a provider response to a fixed outcome. Only a
+// 410 Unregistered or ExpiredToken proves a token is dead. Apple also returns
+// BadDeviceToken for a sandbox/production environment mismatch, and
+// DeviceTokenNotForTopic for a bundle topic mismatch; both are server
+// configuration failures that would otherwise erase every registration, so
+// they reject this notification without retiring the token.
 func classifyAPNSResponse(res *apns2.Response, _ error) apnsOutcome {
 	if res == nil {
 		return apnsOutcomeTransientNetwork
@@ -49,9 +56,7 @@ func classifyAPNSResponse(res *apns2.Response, _ error) apnsOutcome {
 		return apnsOutcomeSent
 	}
 	switch res.Reason {
-	case apns2.ReasonBadDeviceToken,
-		apns2.ReasonDeviceTokenNotForTopic,
-		apns2.ReasonExpiredToken,
+	case apns2.ReasonExpiredToken,
 		apns2.ReasonUnregistered:
 		return apnsOutcomeInvalidToken
 	}
@@ -72,6 +77,61 @@ func apnsOutcomeError(outcome apnsOutcome) error {
 		return ErrAPNSUnavailable
 	default:
 		return ErrAPNSRejected
+	}
+}
+
+// ApnsRejection carries the provider classification a durable plaintext
+// dispatcher needs. It unwraps to the fixed ErrAPNSRejected or
+// ErrAPNSUnavailable sentinel and reports only that sentinel's fixed text, so
+// no token, URL or transport detail can reach a log through it.
+// InvalidToken is deliberately narrower than Permanent: bad credentials, a
+// malformed payload, an environment mismatch or a topic mismatch must never
+// retire a registration.
+type ApnsRejection struct {
+	StatusCode     int
+	Reason         string
+	InvalidToken   bool
+	Permanent      bool
+	UnregisteredAt time.Time
+	sentinel       error
+}
+
+func (e *ApnsRejection) Error() string {
+	if e == nil || e.sentinel == nil {
+		return ErrAPNSRejected.Error()
+	}
+	return e.sentinel.Error()
+}
+
+func (e *ApnsRejection) Unwrap() error {
+	if e == nil || e.sentinel == nil {
+		return ErrAPNSRejected
+	}
+	return e.sentinel
+}
+
+// apnsRejectionError returns nil only for a provider acknowledgement. A
+// missing response is transient and keeps the fixed sentinel; provider
+// responses keep their status, reason and invalidation timestamp.
+func apnsRejectionError(res *apns2.Response, err error) error {
+	outcome := classifyAPNSResponse(res, err)
+	if outcome == apnsOutcomeSent {
+		return nil
+	}
+	if res == nil {
+		return apnsOutcomeError(outcome)
+	}
+	return &ApnsRejection{
+		StatusCode:     res.StatusCode,
+		Reason:         res.Reason,
+		InvalidToken:   outcome == apnsOutcomeInvalidToken,
+		UnregisteredAt: res.Timestamp.Time,
+		// Credential (403) and throttling (429) failures stay retryable within
+		// the bounded window; other client errors will not succeed on retry.
+		Permanent: res.StatusCode >= 400 && res.StatusCode < 500 &&
+			res.StatusCode != http.StatusTooManyRequests &&
+			res.StatusCode != http.StatusForbidden,
+		sentinel: apnsOutcomeError(outcome),
 	}
 }
 

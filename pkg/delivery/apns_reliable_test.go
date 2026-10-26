@@ -566,9 +566,12 @@ func TestClassifyAPNSResponseUsesOnlyFixedOutcomes(t *testing.T) {
 		{name: "network", err: errors.New("sensitive network detail"), want: apnsOutcomeTransientNetwork},
 		{name: "throttle", response: &apns2.Response{StatusCode: 429, Reason: apns2.ReasonTooManyRequests}, want: apnsOutcomeTransientThrottle},
 		{name: "server", response: &apns2.Response{StatusCode: 503, Reason: apns2.ReasonShutdown}, want: apnsOutcomeTransientServer},
-		{name: "bad token", response: &apns2.Response{StatusCode: 400, Reason: apns2.ReasonBadDeviceToken}, want: apnsOutcomeInvalidToken},
+		// An environment (sandbox/production) mismatch also yields
+		// BadDeviceToken, and a bundle topic mismatch is a server
+		// configuration failure: neither proves the token dead.
+		{name: "bad token is not proof of a dead token", response: &apns2.Response{StatusCode: 400, Reason: apns2.ReasonBadDeviceToken}, want: apnsOutcomeRejected},
 		{name: "response wins over transport detail", response: &apns2.Response{StatusCode: 410, Reason: apns2.ReasonUnregistered}, err: errors.New("transport detail"), want: apnsOutcomeInvalidToken},
-		{name: "token topic mismatch", response: &apns2.Response{StatusCode: 400, Reason: apns2.ReasonDeviceTokenNotForTopic}, want: apnsOutcomeInvalidToken},
+		{name: "token topic mismatch preserves registration", response: &apns2.Response{StatusCode: 400, Reason: apns2.ReasonDeviceTokenNotForTopic}, want: apnsOutcomeRejected},
 		{name: "expired token", response: &apns2.Response{StatusCode: 410, Reason: apns2.ReasonExpiredToken}, want: apnsOutcomeInvalidToken},
 		{name: "unregistered", response: &apns2.Response{StatusCode: 410, Reason: apns2.ReasonUnregistered}, want: apnsOutcomeInvalidToken},
 		{name: "terminal", response: &apns2.Response{StatusCode: 400, Reason: apns2.ReasonBadPriority}, want: apnsOutcomeRejected},
@@ -788,6 +791,36 @@ func TestReliableAPNSInvalidTokenPersistsIndependentErasureMarker(t *testing.T) 
 	require.Empty(t, store.erasures)
 	require.Empty(t, store.rescheduled)
 	require.Empty(t, store.deleted)
+}
+
+// The secure dev bridge sends through the APNs development gateway. A
+// production (TestFlight) token answers BadDeviceToken there, and a bundle
+// topic mismatch answers DeviceTokenNotForTopic. Either would otherwise erase
+// every affected route; both must finish the job as rejected instead.
+func TestReliableAPNSEnvironmentOrTopicMismatchDoesNotErase(t *testing.T) {
+	for _, reason := range []string{
+		apns2.ReasonBadDeviceToken,
+		apns2.ReasonDeviceTokenNotForTopic,
+	} {
+		t.Run(reason, func(t *testing.T) {
+			now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+			store := &fakeDeliveryJobStore{}
+			client := &reliableFakeClient{responses: []*apns2.Response{{
+				StatusCode: 400,
+				Reason:     reason,
+			}}}
+			delivery := newReliabilityFixture(now, client, store)
+			job := claimedJobFixture(now, 1)
+			delivery.processClaimedJob(job)
+			require.Len(t, client.notifications, 1)
+			require.Len(t, store.attemptRecords, 1)
+			require.Empty(t, store.conversions)
+			require.Empty(t, store.erasures)
+			require.Empty(t, store.rescheduled)
+			require.Len(t, store.deleted, 1)
+			require.False(t, delivery.reliable.hasInvalidTokenClaim(job.JobID))
+		})
+	}
 }
 
 func TestReliableAPNSConversionFailureDoesNotReplayOrEraseOriginalClaim(t *testing.T) {

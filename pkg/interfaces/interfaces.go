@@ -21,9 +21,10 @@ const (
 )
 
 type DeliveryMechanism struct {
-	Kind      DeliveryMechanismKind `json:"kind"`
-	Token     string                `json:"token"`
-	UpdatedAt time.Time             `json:"-"`
+	Kind                DeliveryMechanismKind `json:"kind"`
+	Token               string                `json:"token"`
+	UpdatedAt           time.Time             `json:"-"`
+	RegistrationVersion int64                 `json:"-"`
 }
 
 type PayloadFormat int
@@ -293,4 +294,11 @@ type WelcomeSubscription struct {
 type Delivery interface {
 	CanDeliver(req SendRequest) bool
 	Send(ctx context.Context, req SendRequest) error
+}
+
+// TokenInvalidator retires only the captured delivery-token version, never the
+// installation or its subscriptions. invalidBefore is the provider's last-known
+// invalidation time (zero for a bad-token rejection without a timestamp).
+type TokenInvalidator interface {
+	InvalidateDeliveryToken(ctx context.Context, installation Installation, invalidBefore time.Time) error
 }

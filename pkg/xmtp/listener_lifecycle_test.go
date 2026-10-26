@@ -86,6 +86,21 @@ func TestGracefullyClosedStreamsBackOffBeforeReconnecting(t *testing.T) {
 	})
 }
 
+func TestStopInterruptsMaximumReconnectDelay(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan bool, 1)
+	delay := MAX_SLEEP_TIME
+	go func() { done <- waitForReconnect(ctx, &delay) }()
+	cancel()
+	select {
+	case live := <-done:
+		require.False(t, live)
+	case <-time.After(time.Second):
+		t.Fatal("shutdown remained blocked by reconnect backoff")
+	}
+}
+
 func TestConcurrentStopAndReconnectLeavesNoConnection(t *testing.T) {
 	for _, version := range []string{"v3", "v4"} {
 		t.Run(version, func(t *testing.T) {

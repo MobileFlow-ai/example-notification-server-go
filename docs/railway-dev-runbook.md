@@ -621,7 +621,8 @@ the owner is not sufficient to activate A10: the restricted runtime credential
 cannot use the four new tables until an operator performs this separate grant
 ceremony. Perform it only in the private migration job, with every bridge
 replica stopped, after independently verifying the dedicated dev database,
-clean `14|false` schema state, exact candidate image, and exact runtime role.
+clean current schema state (`15|false` once migration 00015 is applied), exact
+candidate image, and exact runtime role.
 It does not authorize mounting A10 or enabling APNS.
 
 In an owner `psql` session, set `runtime_role` to the already-created exact
@@ -758,6 +759,30 @@ triggers, owner separation, schema-migration read-only grant, and exact
 gate even when schema version is current.
 That source contract does not authorize running the ceremony, setting Railway
 variables, applying migration 00014, or deploying either route.
+
+## Migration 00015 notification delivery durability (plaintext path only)
+
+Migration 00015 creates schema `notification_queue` with
+`notification_envelopes` and `notification_recipient_receipts` and, only where
+the legacy `device_delivery_mechanisms` relation still exists, adds its
+`invalidated_at` and `registration_version` columns. It needs no `CREATE` on
+`public` (which retirement revokes from non-owners), only the database-level
+privilege migration 00006 already needed to create `hytch_push_vault`. On a
+retired secure-vault database the column change is skipped, so the migration
+applies and reverts there, including as a non-superuser migration owner.
+Secure vault mode never wires the durable envelope queue or the plaintext token
+invalidator: the restricted runtime role is never granted these tables, and
+queued envelopes would reveal which topics have subscribers. No grant ceremony
+is needed or permitted for them.
+
+Secure runtime startup never migrates, so an image that embeds 00015 fails the
+schema gate (`database schema gate failed`) against a database still at
+`14|false`. Before deploying such an image to the dev bridge, run the private
+migration job (`--migrate-only` with `MIGRATION_DB_CONNECTION_STRING`, bridge
+replicas stopped) from that exact image and verify `15|false` read-only, then
+deploy. After that no older image can start against the database (the schema
+gate requires the exact embedded version), so roll forward only. Never
+down-migrate a live bridge database.
 
 ## Private incident-access contract
 
@@ -943,8 +968,8 @@ unknown replica.
    an argument or printed.
 
    Require `preflight=pass` and record its safe boolean statuses plus the
-   JSON-escaped current database name. The preflight requires migration 11
-   clean, only its own client session, no logical subscription, no enabled
+   JSON-escaped current database name. The preflight requires the current
+   migration (15 since migration 00015) clean, only its own client session, no logical subscription, no enabled
    event trigger, all four exact owner-held legacy tables, an empty activation
    marker with exactly the non-null `singleton BOOLEAN` and
    `activated_at TIMESTAMPTZ` columns, the exact activation/rejection function

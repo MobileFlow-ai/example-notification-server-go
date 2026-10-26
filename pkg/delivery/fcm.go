@@ -90,6 +90,30 @@ func (f FcmDelivery) Send(ctx context.Context, req interfaces.SendRequest) error
 		},
 	})
 
+	return classifyFcmError(err)
+}
+
+// FcmRejection marks an FCM failure that cannot succeed on retry: the token
+// is unregistered or malformed, or belongs to another sender. Durable
+// dispatch records such a recipient as rejected instead of retrying it.
+// Quota, availability and APNs credential failures stay retryable.
+type FcmRejection struct {
+	cause error
+}
+
+func (e *FcmRejection) Error() string { return e.cause.Error() }
+
+func (e *FcmRejection) Unwrap() error { return e.cause }
+
+func classifyFcmError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if messaging.IsUnregistered(err) ||
+		messaging.IsInvalidArgument(err) ||
+		messaging.IsSenderIDMismatch(err) {
+		return &FcmRejection{cause: err}
+	}
 	return err
 }
 
@@ -101,6 +125,9 @@ func buildFcmApnsCustomData(req interfaces.SendRequest, data map[string]string) 
 	}
 	if encryptedMessage, ok := data["encryptedMessage"]; ok {
 		customData["encryptedMessage"] = encryptedMessage
+	}
+	if req.IdempotencyKey != "" {
+		customData["notification_id"] = req.IdempotencyKey
 	}
 	if req.TopicBytesB64 != "" {
 		customData["topicBytesB64"] = req.TopicBytesB64
@@ -116,6 +143,9 @@ func buildFcmData(req interfaces.SendRequest) map[string]string {
 	}
 	if req.MessageContext.MessageType != topics.V3Welcome {
 		data["encryptedMessage"] = base64.StdEncoding.EncodeToString(req.EncryptedMessage)
+	}
+	if req.IdempotencyKey != "" {
+		data["notification_id"] = req.IdempotencyKey
 	}
 	if req.TopicBytesB64 != "" {
 		data["topicBytesB64"] = req.TopicBytesB64

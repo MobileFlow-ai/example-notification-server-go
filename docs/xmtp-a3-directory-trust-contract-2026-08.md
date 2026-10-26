@@ -155,8 +155,8 @@ holders, roles with mutation privileges, and catalog drift all fail closed.
 Migration 00014 grants nothing to a deployment-specific role and revokes
 PUBLIC access. If witness activation is separately authorized, perform this
 ceremony only from the owner-only migration job while every bridge replica is
-stopped, after verifying the exact dedicated database, clean `14|false`
-schema, candidate image, and non-owner runtime LOGIN. The deployed DSN must
+stopped, after verifying the exact dedicated database, clean current schema
+(`15|false` since migration 00015), candidate image, and non-owner runtime LOGIN. The deployed DSN must
 authenticate as that LOGIN directly; it must not authenticate as an owner and
 select this role through `SET ROLE`, a connection option, or `SET SESSION
 AUTHORIZATION`:
