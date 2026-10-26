@@ -504,6 +504,13 @@ func runServer() {
 		// wired only for the plaintext listener path.
 		var tokenInvalidators []interfaces.TokenInvalidator
 		if !opts.Vault.Enabled {
+			// A durable plaintext listener without a provider would record
+			// every recipient as rejected, and a later restart with a
+			// provider could not redeliver them. Secure vault mode keeps its
+			// audit configuration with APNS disabled.
+			if len(deliveryServices) == 0 {
+				logger.Fatal("listener requires at least one configured delivery provider")
+			}
 			if invalidator, ok := installationsService.(interfaces.TokenInvalidator); ok {
 				tokenInvalidators = append(tokenInvalidators, invalidator)
 			}

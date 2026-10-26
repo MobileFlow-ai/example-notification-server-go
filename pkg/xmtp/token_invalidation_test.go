@@ -160,7 +160,7 @@ func TestDurableDelivery_EnvironmentMismatchKeepsRegistration(t *testing.T) {
 			require.NoError(t, dispatcher.dispatchContext(attemptCtx, req))
 
 			var status, class string
-			require.NoError(t, db.QueryRowContext(ctx, "SELECT status, failure_class FROM notification_recipient_receipts WHERE envelope_id=$1 AND installation_id='device'", env.ID).Scan(&status, &class))
+			require.NoError(t, db.QueryRowContext(ctx, "SELECT status, failure_class FROM notification_queue.notification_recipient_receipts WHERE envelope_id=$1 AND installation_id='device'", env.ID).Scan(&status, &class))
 			require.Equal(t, tc.status, status)
 			require.Equal(t, "provider_permanent", class)
 			after, err := installationsService.GetInstallations(ctx, []string{"device"})

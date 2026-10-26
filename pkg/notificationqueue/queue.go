@@ -85,7 +85,7 @@ func (s *Store) Claim(ctx context.Context, listener string) (*interfaces.Notific
 	if err != nil {
 		return nil, err
 	}
-	return &interfaces.NotificationEnvelope{ID: row.ID, Listener: row.Listener, MessageKey: row.MessageKey, Payload: row.Payload, Attempts: row.Attempts, LeaseID: row.LeaseID}, nil
+	return &interfaces.NotificationEnvelope{ID: row.ID, Listener: row.Listener, MessageKey: row.MessageKey, Payload: row.Payload, Attempts: row.Attempts, LeaseID: row.LeaseID, RecipientsPrepared: row.RecipientsPrepared}, nil
 }
 func checkLease(rows int64, err error) error {
 	if err != nil {
@@ -138,6 +138,11 @@ func (s *Store) PrepareRecipients(ctx context.Context, env interfaces.Notificati
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	if env.RecipientsPrepared {
+		// The snapshot from the first attempt is authoritative; a larger
+		// current recipient set must not abandon it.
+		return nil
+	}
 	if len(ids) > MaxRecipients {
 		return interfaces.ErrNotificationRecipientLimit
 	}

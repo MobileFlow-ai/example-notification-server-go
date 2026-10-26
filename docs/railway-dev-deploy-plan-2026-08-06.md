@@ -109,7 +109,9 @@ and incident-access variables (separate, later, reviewed change).
     Railway variables has the full posture; secure startup verifies and
     refuses on violations).
 - Schema acceptance: `schema_migrations` must read exactly `14|false` before
-  first runtime start (the secure runtime verifies and never migrates).
+  first runtime start (the secure runtime verifies and never migrates). Since
+  migration 00015 (2026-10-26) the current value is `15|false`; see the
+  runbook's migration 00015 section.
 - Backups: Railway's default snapshot posture is acceptable for dev; the
   vault holds only encrypted route material and keyed lookups by design.
 

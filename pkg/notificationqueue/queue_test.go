@@ -23,7 +23,7 @@ func TestQueue_RestartDuplicateAndRecipientAck(t *testing.T) {
 	require.NoError(t, store.FinishRecipient(ctx, *env, "device-a", ticket, "accepted", ""))
 	require.NoError(t, store.Finish(ctx, *env, "pending", "provider_transient"))
 	// Recreate the store and advance only the test fixture's retry deadline.
-	_, err = db.ExecContext(ctx, "UPDATE notification_envelopes SET next_attempt_at=clock_timestamp() - INTERVAL '1 second' WHERE id=$1", env.ID)
+	_, err = db.ExecContext(ctx, "UPDATE notification_queue.notification_envelopes SET next_attempt_at=clock_timestamp() - INTERVAL '1 second' WHERE id=$1", env.ID)
 	require.NoError(t, err)
 	restarted := New(db)
 	retry, err := restarted.Claim(ctx, "v4")
@@ -44,7 +44,7 @@ func TestQueue_RestartDuplicateAndRecipientAck(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, next)
 	var payload []byte
-	require.NoError(t, db.QueryRowContext(ctx, "SELECT payload FROM notification_envelopes WHERE id=$1", env.ID).Scan(&payload))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT payload FROM notification_queue.notification_envelopes WHERE id=$1", env.ID).Scan(&payload))
 	require.Empty(t, payload)
 }
 
@@ -87,7 +87,7 @@ func TestQueue_ExpiredLeaseCannotAcknowledgeReplacement(t *testing.T) {
 	oldTicket, done, err := store.ClaimRecipient(ctx, *old, "device")
 	require.NoError(t, err)
 	require.False(t, done)
-	_, err = db.ExecContext(ctx, "UPDATE notification_envelopes SET lease_until=clock_timestamp() - INTERVAL '1 second' WHERE id=$1", old.ID)
+	_, err = db.ExecContext(ctx, "UPDATE notification_queue.notification_envelopes SET lease_until=clock_timestamp() - INTERVAL '1 second' WHERE id=$1", old.ID)
 	require.NoError(t, err)
 	replacement, err := New(db).Claim(ctx, "v4")
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestQueue_ExhaustionExpiryAndPrivacyRetention(t *testing.T) {
 	ctx := t.Context()
 	store := New(db)
 	require.NoError(t, store.Enqueue(ctx, "v3", "exhausted", []byte("encrypted")))
-	_, err := db.ExecContext(ctx, "UPDATE notification_envelopes SET attempts=11")
+	_, err := db.ExecContext(ctx, "UPDATE notification_queue.notification_envelopes SET attempts=11")
 	require.NoError(t, err)
 	env, err := store.Claim(ctx, "v3")
 	require.NoError(t, err)
@@ -141,21 +141,21 @@ func TestQueue_ExhaustionExpiryAndPrivacyRetention(t *testing.T) {
 	require.NoError(t, store.Finish(ctx, *env, "pending", "provider_transient"))
 	var status string
 	var payload []byte
-	require.NoError(t, db.QueryRowContext(ctx, "SELECT status,payload FROM notification_envelopes WHERE id=$1", env.ID).Scan(&status, &payload))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT status,payload FROM notification_queue.notification_envelopes WHERE id=$1", env.ID).Scan(&status, &payload))
 	require.Equal(t, "dead", status)
 	require.Empty(t, payload)
 	require.NoError(t, store.Enqueue(ctx, "v3", "expired", []byte("encrypted")))
-	_, err = db.ExecContext(ctx, "UPDATE notification_envelopes SET created_at=clock_timestamp() - INTERVAL '2 days' WHERE message_key='expired'")
+	_, err = db.ExecContext(ctx, "UPDATE notification_queue.notification_envelopes SET created_at=clock_timestamp() - INTERVAL '2 days' WHERE message_key='expired'")
 	require.NoError(t, err)
 	require.NoError(t, store.Maintain(ctx))
-	require.NoError(t, db.QueryRowContext(ctx, "SELECT status,payload FROM notification_envelopes WHERE message_key='expired'").Scan(&status, &payload))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT status,payload FROM notification_queue.notification_envelopes WHERE message_key='expired'").Scan(&status, &payload))
 	require.Equal(t, "dead", status)
 	require.Empty(t, payload)
-	_, err = db.ExecContext(ctx, "UPDATE notification_envelopes SET created_at=clock_timestamp() - INTERVAL '8 days'")
+	_, err = db.ExecContext(ctx, "UPDATE notification_queue.notification_envelopes SET created_at=clock_timestamp() - INTERVAL '8 days'")
 	require.NoError(t, err)
 	require.NoError(t, store.Maintain(ctx))
 	var count int
-	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM notification_envelopes").Scan(&count))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM notification_queue.notification_envelopes").Scan(&count))
 	require.Zero(t, count)
 }
 
@@ -165,11 +165,11 @@ func TestQueue_CapacityPreservesDuplicatesAndBackpressuresNewWork(t *testing.T) 
 	store := New(db)
 	// Use small encrypted fixture bodies; exercise the real capacity query and
 	// unique-key behavior without allocating the 512MiB byte limit in a test.
-	_, err := db.ExecContext(ctx, "INSERT INTO notification_envelopes(listener,message_key,payload) SELECT 'v3', 'capacity-'||n::text, 'encrypted'::bytea FROM generate_series(1,100000) n")
+	_, err := db.ExecContext(ctx, "INSERT INTO notification_queue.notification_envelopes(listener,message_key,payload) SELECT 'v3', 'capacity-'||n::text, 'encrypted'::bytea FROM generate_series(1,100000) n")
 	require.NoError(t, err)
 	require.NoError(t, store.Enqueue(ctx, "v3", "capacity-1", []byte("encrypted")), "a duplicate must remain acknowledged even while the queue is full")
 	require.Error(t, store.Enqueue(ctx, "v3", "new-frame", []byte("encrypted")))
 	var count int
-	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM notification_envelopes").Scan(&count))
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM notification_queue.notification_envelopes").Scan(&count))
 	require.Equal(t, 100000, count)
 }

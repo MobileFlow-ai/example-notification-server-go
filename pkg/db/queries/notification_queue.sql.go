@@ -13,10 +13,10 @@ import (
 )
 
 const claimNotificationEnvelope = `-- name: ClaimNotificationEnvelope :one
-UPDATE notification_envelopes AS e
+UPDATE notification_queue.notification_envelopes AS e
 SET attempts = e.attempts + 1, lease_id = $1, lease_until = clock_timestamp() + INTERVAL '90 seconds'
 FROM (
-    SELECT pending.id FROM notification_envelopes AS pending
+    SELECT pending.id FROM notification_queue.notification_envelopes AS pending
     WHERE pending.listener = $2 AND pending.status = 'pending'
       AND pending.attempts < 12 AND pending.created_at >= clock_timestamp() - INTERVAL '24 hours'
       AND pending.next_attempt_at <= clock_timestamp() AND pending.lease_until < clock_timestamp()
@@ -24,7 +24,7 @@ FROM (
     FOR UPDATE SKIP LOCKED LIMIT 1
 ) candidate
 WHERE e.id = candidate.id
-RETURNING e.id, e.listener, e.message_key, e.payload, e.attempts, e.lease_id
+RETURNING e.id, e.listener, e.message_key, e.payload, e.attempts, e.lease_id, e.recipients_prepared
 `
 
 type ClaimNotificationEnvelopeParams struct {
@@ -33,12 +33,13 @@ type ClaimNotificationEnvelopeParams struct {
 }
 
 type ClaimNotificationEnvelopeRow struct {
-	ID         int64
-	Listener   string
-	MessageKey string
-	Payload    []byte
-	Attempts   int32
-	LeaseID    string
+	ID                 int64
+	Listener           string
+	MessageKey         string
+	Payload            []byte
+	Attempts           int32
+	LeaseID            string
+	RecipientsPrepared bool
 }
 
 func (q *Queries) ClaimNotificationEnvelope(ctx context.Context, arg ClaimNotificationEnvelopeParams) (ClaimNotificationEnvelopeRow, error) {
@@ -51,16 +52,17 @@ func (q *Queries) ClaimNotificationEnvelope(ctx context.Context, arg ClaimNotifi
 		&i.Payload,
 		&i.Attempts,
 		&i.LeaseID,
+		&i.RecipientsPrepared,
 	)
 	return i, err
 }
 
 const claimNotificationRecipient = `-- name: ClaimNotificationRecipient :one
-UPDATE notification_recipient_receipts
+UPDATE notification_queue.notification_recipient_receipts
 SET lease_id = $1, lease_until = clock_timestamp() + INTERVAL '30 seconds'
 WHERE envelope_id = $2 AND installation_id = $3
   AND status = 'pending' AND lease_until < clock_timestamp()
-  AND EXISTS (SELECT 1 FROM notification_envelopes e WHERE e.id = $2
+  AND EXISTS (SELECT 1 FROM notification_queue.notification_envelopes e WHERE e.id = $2
               AND e.lease_id = $4
               AND e.status = 'pending' AND e.lease_until > clock_timestamp())
 RETURNING lease_id
@@ -86,7 +88,7 @@ func (q *Queries) ClaimNotificationRecipient(ctx context.Context, arg ClaimNotif
 }
 
 const enqueueNotificationEnvelope = `-- name: EnqueueNotificationEnvelope :exec
-INSERT INTO notification_envelopes(listener, message_key, payload)
+INSERT INTO notification_queue.notification_envelopes(listener, message_key, payload)
 VALUES ($1, $2, $3)
 ON CONFLICT (listener, message_key) DO NOTHING
 `
@@ -103,7 +105,7 @@ func (q *Queries) EnqueueNotificationEnvelope(ctx context.Context, arg EnqueueNo
 }
 
 const expireNotificationEnvelopes = `-- name: ExpireNotificationEnvelopes :exec
-UPDATE notification_envelopes
+UPDATE notification_queue.notification_envelopes
 SET status = 'dead', payload = ''::bytea, failure_class = 'expired', lease_id = '', lease_until = '-infinity'
 WHERE status = 'pending' AND lease_until < clock_timestamp()
   AND (created_at < clock_timestamp() - INTERVAL '24 hours' OR attempts >= 12)
@@ -115,7 +117,7 @@ func (q *Queries) ExpireNotificationEnvelopes(ctx context.Context) error {
 }
 
 const finishNotificationEnvelope = `-- name: FinishNotificationEnvelope :execrows
-UPDATE notification_envelopes
+UPDATE notification_queue.notification_envelopes
 SET status = $1,
     payload = CASE WHEN $1::text = 'pending' THEN payload ELSE ''::bytea END,
     next_attempt_at = clock_timestamp() + $2::integer * INTERVAL '1 second',
@@ -147,11 +149,11 @@ func (q *Queries) FinishNotificationEnvelope(ctx context.Context, arg FinishNoti
 }
 
 const finishNotificationRecipient = `-- name: FinishNotificationRecipient :execrows
-UPDATE notification_recipient_receipts AS receipt
+UPDATE notification_queue.notification_recipient_receipts AS receipt
 SET status = $1, failure_class = $2, lease_until = '-infinity'
 WHERE receipt.envelope_id = $3 AND receipt.installation_id = $4
   AND receipt.lease_id = $5 AND receipt.status = 'pending' AND receipt.lease_until > clock_timestamp()
-  AND EXISTS (SELECT 1 FROM notification_envelopes e WHERE e.id = $3
+  AND EXISTS (SELECT 1 FROM notification_queue.notification_envelopes e WHERE e.id = $3
               AND e.lease_id = $6
               AND e.status = 'pending' AND e.lease_until > clock_timestamp())
 `
@@ -181,7 +183,7 @@ func (q *Queries) FinishNotificationRecipient(ctx context.Context, arg FinishNot
 }
 
 const getNotificationRecipientStatus = `-- name: GetNotificationRecipientStatus :one
-SELECT status FROM notification_recipient_receipts
+SELECT status FROM notification_queue.notification_recipient_receipts
 WHERE envelope_id = $1 AND installation_id = $2
 `
 
@@ -207,7 +209,7 @@ func (q *Queries) LockNotificationAdmission(ctx context.Context) error {
 }
 
 const notificationEnvelopeExists = `-- name: NotificationEnvelopeExists :one
-SELECT EXISTS (SELECT 1 FROM notification_envelopes WHERE listener = $1 AND message_key = $2)
+SELECT EXISTS (SELECT 1 FROM notification_queue.notification_envelopes WHERE listener = $1 AND message_key = $2)
 `
 
 type NotificationEnvelopeExistsParams struct {
@@ -224,7 +226,7 @@ func (q *Queries) NotificationEnvelopeExists(ctx context.Context, arg Notificati
 
 const notificationPendingCapacity = `-- name: NotificationPendingCapacity :one
 SELECT count(*)::bigint AS count, COALESCE(sum(octet_length(payload)),0)::bigint AS bytes
-FROM notification_envelopes WHERE status = 'pending'
+FROM notification_queue.notification_envelopes WHERE status = 'pending'
 `
 
 type NotificationPendingCapacityRow struct {
@@ -241,10 +243,10 @@ func (q *Queries) NotificationPendingCapacity(ctx context.Context) (Notification
 
 const notificationQueueHealth = `-- name: NotificationQueueHealth :many
 SELECT listener, status, count(*)::bigint AS count, min(created_at)::timestamptz AS oldest_at
-FROM notification_envelopes GROUP BY listener, status
+FROM notification_queue.notification_envelopes GROUP BY listener, status
 UNION ALL
 SELECT e.listener, ('recipient_' || r.status)::text AS status, count(*)::bigint AS count, min(e.created_at)::timestamptz AS oldest_at
-FROM notification_recipient_receipts r JOIN notification_envelopes e ON e.id = r.envelope_id
+FROM notification_queue.notification_recipient_receipts r JOIN notification_queue.notification_envelopes e ON e.id = r.envelope_id
 GROUP BY e.listener, r.status
 ORDER BY listener, status
 `
@@ -286,13 +288,13 @@ func (q *Queries) NotificationQueueHealth(ctx context.Context) ([]NotificationQu
 
 const prepareNotificationRecipients = `-- name: PrepareNotificationRecipients :exec
 WITH prepared AS (
-    UPDATE notification_envelopes AS prepared_envelope
+    UPDATE notification_queue.notification_envelopes AS prepared_envelope
     SET recipients_prepared = TRUE
     WHERE prepared_envelope.id = $2 AND prepared_envelope.lease_id = $3
       AND prepared_envelope.status = 'pending' AND prepared_envelope.lease_until > clock_timestamp() AND NOT prepared_envelope.recipients_prepared
     RETURNING prepared_envelope.id
 )
-INSERT INTO notification_recipient_receipts(envelope_id, installation_id, lease_id, lease_until)
+INSERT INTO notification_queue.notification_recipient_receipts(envelope_id, installation_id, lease_id, lease_until)
 SELECT prepared.id, recipients.installation_id, '', '-infinity'::timestamptz
 FROM prepared CROSS JOIN (SELECT DISTINCT unnest($1::text[]) AS installation_id) recipients
 ON CONFLICT (envelope_id, installation_id) DO NOTHING
@@ -310,7 +312,7 @@ func (q *Queries) PrepareNotificationRecipients(ctx context.Context, arg Prepare
 }
 
 const purgeNotificationReceipts = `-- name: PurgeNotificationReceipts :exec
-DELETE FROM notification_envelopes
+DELETE FROM notification_queue.notification_envelopes
 WHERE status != 'pending' AND created_at < clock_timestamp() - INTERVAL '7 days'
 `
 
@@ -320,7 +322,7 @@ func (q *Queries) PurgeNotificationReceipts(ctx context.Context) error {
 }
 
 const recordRejectedNotificationEnvelope = `-- name: RecordRejectedNotificationEnvelope :exec
-INSERT INTO notification_envelopes(listener, message_key, payload, status, failure_class)
+INSERT INTO notification_queue.notification_envelopes(listener, message_key, payload, status, failure_class)
 VALUES ($1, $2, ''::bytea, 'dead', $3)
 ON CONFLICT (listener, message_key) DO NOTHING
 `
@@ -337,7 +339,7 @@ func (q *Queries) RecordRejectedNotificationEnvelope(ctx context.Context, arg Re
 }
 
 const renewNotificationLease = `-- name: RenewNotificationLease :execrows
-UPDATE notification_envelopes SET lease_until = clock_timestamp() + INTERVAL '90 seconds'
+UPDATE notification_queue.notification_envelopes SET lease_until = clock_timestamp() + INTERVAL '90 seconds'
 WHERE id = $1 AND lease_id = $2 AND status = 'pending'
   AND lease_until > clock_timestamp()
 `

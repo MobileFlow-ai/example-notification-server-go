@@ -15,11 +15,13 @@ import (
 	"github.com/xmtp/example-notification-server-go/pkg/options"
 	"github.com/xmtp/example-notification-server-go/pkg/subscriptions"
 	"github.com/xmtp/example-notification-server-go/pkg/testutils"
+	"github.com/xmtp/xmtpd/pkg/envelopes"
 	v1 "github.com/xmtp/xmtpd/pkg/proto/message_api/v1"
 	envelopesProto "github.com/xmtp/xmtpd/pkg/proto/xmtpv4/envelopes"
 	notificationApi "github.com/xmtp/xmtpd/pkg/proto/xmtpv4/message_api"
 	"github.com/xmtp/xmtpd/pkg/topic"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 const admissionTestGroupTopic = "/xmtp/mls/1/g-24ce39d660600b3a98adff3075b6d1f4/proto"
@@ -59,7 +61,7 @@ type envelopeRow struct {
 
 func queryEnvelopeRows(t *testing.T, ctx context.Context, db *sql.DB) map[string]envelopeRow {
 	t.Helper()
-	rows, err := db.QueryContext(ctx, "SELECT message_key, status, failure_class, octet_length(payload) FROM notification_envelopes")
+	rows, err := db.QueryContext(ctx, "SELECT message_key, status, failure_class, octet_length(payload) FROM notification_queue.notification_envelopes")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rows.Close()) }()
 	out := map[string]envelopeRow{}
@@ -140,9 +142,49 @@ func TestDurableAdmission_OversizedFrameIsSkippedV4(t *testing.T) {
 
 	rows := queryEnvelopeRows(t, ctx, db)
 	require.Len(t, rows, 2)
-	require.Equal(t, envelopeRow{key: "1:1", status: "dead", class: "oversized"}, rows["1:1"])
-	require.Equal(t, "pending", rows["1:2"].status)
-	require.Positive(t, rows["1:2"].payloadBytes)
+	oversizedKey := v4QueueKey(t, oversized)
+	require.Equal(t, envelopeRow{key: oversizedKey, status: "dead", class: "oversized"}, rows[oversizedKey])
+	require.Equal(t, "pending", rows[v4QueueKey(t, normal)].status)
+	require.Positive(t, rows[v4QueueKey(t, normal)].payloadBytes)
+}
+
+func v4QueueKey(t *testing.T, env *envelopesProto.OriginatorEnvelope) string {
+	t.Helper()
+	orig, err := envelopes.NewOriginatorEnvelope(env)
+	require.NoError(t, err)
+	payload, err := (proto.MarshalOptions{Deterministic: true}).Marshal(env)
+	require.NoError(t, err)
+	return buildV4QueueKey(orig, payload)
+}
+
+// node:seq alone must not deduplicate different content: a network reset or
+// a re-provisioned node can reuse an originator sequence. A replay of the
+// identical envelope is still deduplicated.
+func TestDurableAdmission_V4KeyBindsEnvelopeContent(t *testing.T) {
+	db := testutils.CreateTestDb(t)
+	ctx := t.Context()
+	logger := testutils.TestLogger(t)
+	installationsService := installations.NewInstallationsService(logger, db)
+	subscriptionsService := subscriptions.NewSubscriptionsService(logger, db)
+	l, err := NewV4Listener(ctx, logger, options.XmtpOptions{GrpcAddress: "localhost:1", NumWorkers: 1}, installationsService, subscriptionsService, []interfaces.Delivery{mocks.NewDelivery(t)}, "test", "test")
+	require.NoError(t, err)
+	t.Cleanup(l.Stop)
+	l.SetNotificationQueue(notificationqueue.New(db))
+	groupID := []byte{0x61, 0x62, 0x63, 0x64}
+	groupTopic := topic.NewTopic(topic.TopicKindGroupMessagesV1, groupID)
+	registerV4Installation(t, &V4Listener{installations: installationsService}, "inst", interfaces.PayloadFormatV4)
+	subscribeV4ToTopic(t, &V4Listener{subscriptions: subscriptionsService}, "inst", groupTopic)
+
+	first := buildGroupMessageOriginatorEnvelope(t, 1, 7, int64(time.Second), groupID, []byte("first"), nil, true)
+	reused := buildGroupMessageOriginatorEnvelope(t, 1, 7, int64(time.Second), groupID, []byte("different content"), nil, true)
+	delay := time.Millisecond
+	require.False(t, l.consumeEnvelopeStream(&scriptedV4Stream{responses: []*notificationApi.SubscribeEnvelopesResponse{
+		{Envelopes: []*envelopesProto.OriginatorEnvelope{first, reused, first}},
+	}}, &delay))
+	rows := queryEnvelopeRows(t, ctx, db)
+	require.Len(t, rows, 2, "same node:seq with new content is new work; the identical replay is deduplicated")
+	require.Equal(t, "pending", rows[v4QueueKey(t, first)].status)
+	require.Equal(t, "pending", rows[v4QueueKey(t, reused)].status)
 }
 
 // A running listener keeps delivering after an oversized frame: the durable
@@ -172,7 +214,8 @@ func TestDurableAdmission_WorkersKeepRunningAfterOversizedFrame(t *testing.T) {
 		{Envelopes: []*envelopesProto.OriginatorEnvelope{normal}},
 	}}, &delay))
 	require.Eventually(t, func() bool { return sends.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
-	require.Eventually(t, func() bool { return queryEnvelopeRows(t, ctx, db)["1:2"].status == "complete" }, 5*time.Second, 10*time.Millisecond)
+	normalKey := v4QueueKey(t, normal)
+	require.Eventually(t, func() bool { return queryEnvelopeRows(t, ctx, db)[normalKey].status == "complete" }, 5*time.Second, 10*time.Millisecond)
 	select {
 	case <-l.Failed():
 		t.Fatal("an oversized frame must not fail the listener")

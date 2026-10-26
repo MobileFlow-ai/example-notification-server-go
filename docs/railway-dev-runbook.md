@@ -762,22 +762,27 @@ variables, applying migration 00014, or deploying either route.
 
 ## Migration 00015 notification delivery durability (plaintext path only)
 
-Migration 00015 adds `notification_envelopes` and
-`notification_recipient_receipts` and, only where the legacy
-`device_delivery_mechanisms` relation still exists, its `invalidated_at` and
-`registration_version` columns. On a retired secure-vault database the column
-change is skipped, so the migration applies and reverts cleanly there. Secure
-vault mode never wires the durable envelope queue or the plaintext token
-invalidator: they live in public tables the restricted runtime role is never
-granted, and queued envelopes would reveal which topics have subscribers. No
-grant ceremony is needed or permitted for these tables.
+Migration 00015 creates schema `notification_queue` with
+`notification_envelopes` and `notification_recipient_receipts` and, only where
+the legacy `device_delivery_mechanisms` relation still exists, adds its
+`invalidated_at` and `registration_version` columns. It needs no `CREATE` on
+`public` (which retirement revokes from non-owners), only the database-level
+privilege migration 00006 already needed to create `hytch_push_vault`. On a
+retired secure-vault database the column change is skipped, so the migration
+applies and reverts there, including as a non-superuser migration owner.
+Secure vault mode never wires the durable envelope queue or the plaintext token
+invalidator: the restricted runtime role is never granted these tables, and
+queued envelopes would reveal which topics have subscribers. No grant ceremony
+is needed or permitted for them.
 
 Secure runtime startup never migrates, so an image that embeds 00015 fails the
 schema gate (`database schema gate failed`) against a database still at
 `14|false`. Before deploying such an image to the dev bridge, run the private
 migration job (`--migrate-only` with `MIGRATION_DB_CONNECTION_STRING`, bridge
 replicas stopped) from that exact image and verify `15|false` read-only, then
-deploy. Never down-migrate a live bridge database.
+deploy. After that no older image can start against the database (the schema
+gate requires the exact embedded version), so roll forward only. Never
+down-migrate a live bridge database.
 
 ## Private incident-access contract
 

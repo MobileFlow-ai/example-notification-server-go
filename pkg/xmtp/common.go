@@ -170,8 +170,11 @@ func (d *deliveryDispatcher) dispatchContext(
 
 // finishRecipient persists one recipient outcome under the envelope and
 // recipient leases. It uses its own deadline rather than the completed
-// provider timeout. A failed write leaves the outcome uncertain, so the
-// recipient stays pending and the envelope retries.
+// provider timeout, and it is not cancelled by listener shutdown: a provider
+// acceptance that lands while the process stops is still recorded, so a
+// restart does not resend it. The leases still fence the write. A failed
+// write leaves the outcome uncertain, so the recipient stays pending and the
+// envelope retries.
 func (d *deliveryDispatcher) finishRecipient(
 	baseContext context.Context,
 	env interfaces.NotificationEnvelope,
@@ -182,7 +185,7 @@ func (d *deliveryDispatcher) finishRecipient(
 	failureClass string,
 ) error {
 	receiptContext, receiptCancel := context.WithTimeout(
-		baseContext,
+		context.WithoutCancel(baseContext),
 		DELIVERY_TIMEOUT,
 	)
 	defer receiptCancel()

@@ -15,6 +15,11 @@ import (
 // on the receive goroutine before a frame is persisted.
 const admissionLookupTimeout = 10 * time.Second
 
+// durableAttemptTimeout bounds one processing attempt of a claimed envelope,
+// so a stalled query cannot hold a worker while its heartbeat keeps the lease
+// alive. Recipients already decided stay decided; the rest retry.
+const durableAttemptTimeout = 5 * time.Minute
+
 // idleClaimInterval is how long an idle durable worker waits before its next
 // claim. Each wait adds up to idleClaimJitter so workers do not poll in phase.
 const (
@@ -165,7 +170,7 @@ func processDurableEnvelope(ctx context.Context, queue interfaces.NotificationQu
 // poison frame, and the caller then fails the listener closed as the
 // in-memory path does for any internal panic.
 func processDurableEnvelopeWithHeartbeat(ctx context.Context, queue interfaces.NotificationQueue, env interfaces.NotificationEnvelope, ready *atomic.Bool, logger *zap.Logger, interval time.Duration, process func(context.Context, []byte) error) (healthy bool) {
-	workCtx, cancel := context.WithCancel(context.WithValue(ctx, envelopeContextKey{}, &env))
+	workCtx, cancel := context.WithTimeout(context.WithValue(ctx, envelopeContextKey{}, &env), durableAttemptTimeout)
 	heartbeatDone := make(chan struct{})
 	var leaseHealthy atomic.Bool
 	leaseHealthy.Store(true)

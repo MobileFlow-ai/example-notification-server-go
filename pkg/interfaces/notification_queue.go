@@ -31,6 +31,9 @@ type NotificationEnvelope struct {
 	Payload    []byte
 	Attempts   int32
 	LeaseID    string
+	// RecipientsPrepared reports that an earlier attempt already persisted
+	// the initial recipient snapshot.
+	RecipientsPrepared bool
 }
 
 type NotificationQueue interface {

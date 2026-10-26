@@ -504,7 +504,7 @@ type Installation struct {
 	PayloadFormat int16
 }
 
-type NotificationEnvelope struct {
+type NotificationQueueNotificationEnvelope struct {
 	ID                 int64
 	Listener           string
 	MessageKey         string
@@ -519,7 +519,7 @@ type NotificationEnvelope struct {
 	RecipientsPrepared bool
 }
 
-type NotificationRecipientReceipt struct {
+type NotificationQueueNotificationRecipientReceipt struct {
 	EnvelopeID     int64
 	InstallationID string
 	Status         string

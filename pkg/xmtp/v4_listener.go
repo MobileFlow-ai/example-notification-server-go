@@ -2,6 +2,8 @@ package xmtp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -248,7 +250,17 @@ func (l *V4Listener) admitEnvelope(env *envelopesProto.OriginatorEnvelope) bool 
 		l.logDependencyFailure()
 		return true
 	}
-	return persistEnvelope(l.ctx, l.queue, "v4", buildV4IdempotencyKey(orig), payload, &l.admissionReady, l.logger)
+	return persistEnvelope(l.ctx, l.queue, "v4", buildV4QueueKey(orig, payload), payload, &l.admissionReady, l.logger)
+}
+
+// buildV4QueueKey deduplicates stream replays of the same envelope. The
+// originator node and sequence alone are not enough: a network reset or a
+// re-provisioned node can reuse them for different content, which must not
+// be silently dropped as a duplicate. The notification identity sent to
+// providers stays buildV4IdempotencyKey.
+func buildV4QueueKey(env *envelopes.OriginatorEnvelope, payload []byte) string {
+	digest := sha256.Sum256(payload)
+	return buildV4IdempotencyKey(env) + ":" + hex.EncodeToString(digest[:16])
 }
 
 func (l *V4Listener) startEnvelopeWorkers() {

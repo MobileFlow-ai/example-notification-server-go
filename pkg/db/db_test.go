@@ -1,7 +1,10 @@
 package db_test
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -27,6 +30,8 @@ func TestMigrateFreshDatabase(t *testing.T) {
 	assertQualifiedRelationExists(t, db, "hytch_push_vault.subscription_leases")
 	assertQualifiedRelationExists(t, db, "hytch_push_vault.delivery_jobs")
 	assertQualifiedRelationExists(t, db, "hytch_push_vault.delivery_dedupes")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_envelopes")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_recipient_receipts")
 }
 
 func TestMigrateExistingLegacySchema(t *testing.T) {
@@ -189,8 +194,7 @@ func resetSchema(t *testing.T, db *sql.DB) {
 
 	statements := []string{
 		"DROP SCHEMA IF EXISTS hytch_push_vault CASCADE",
-		"DROP TABLE IF EXISTS notification_recipient_receipts",
-		"DROP TABLE IF EXISTS notification_envelopes",
+		"DROP SCHEMA IF EXISTS notification_queue CASCADE",
 		"DROP TABLE IF EXISTS schema_migrations",
 		"DROP TABLE IF EXISTS bun_migrations",
 		"DROP TABLE IF EXISTS subscription_hmac_keys",
@@ -229,6 +233,17 @@ func assertRelationAbsent(t *testing.T, db *sql.DB, name string) {
 	err := db.QueryRowContext(t.Context(), `SELECT to_regclass($1) IS NULL`, "public."+name).Scan(&absent)
 	require.NoError(t, err)
 	require.True(t, absent, name)
+}
+
+func assertNotificationQueueAbsent(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	var absent bool
+	require.NoError(t, db.QueryRowContext(
+		t.Context(),
+		`SELECT to_regnamespace('notification_queue') IS NULL`,
+	).Scan(&absent))
+	require.True(t, absent, "notification_queue schema")
 }
 
 func assertSchemaVersion(t *testing.T, db *sql.DB, expected int) {
@@ -276,16 +291,15 @@ func TestNotificationDurability_UpgradesExistingV14(t *testing.T) {
 	require.Equal(t, "kept-token", token)
 	require.Equal(t, int64(1), version)
 	require.False(t, invalidated.Valid)
-	assertRelationExists(t, db, "notification_envelopes")
-	assertRelationExists(t, db, "notification_recipient_receipts")
-	assertRelationExists(t, db, "notification_envelopes_terminal_created_idx")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_envelopes")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_recipient_receipts")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_envelopes_terminal_created_idx")
 	require.NoError(t, database.Migrate(t.Context(), db))
 
 	// Down reverts exactly to 00014 and keeps the legacy row; up reapplies.
 	require.NoError(t, database.MigrateUpTo(t.Context(), db, 14))
 	assertSchemaVersion(t, db, 14)
-	assertRelationAbsent(t, db, "notification_envelopes")
-	assertRelationAbsent(t, db, "notification_recipient_receipts")
+	assertNotificationQueueAbsent(t, db)
 	assertDeliveryTokenVersionColumns(t, db, 0)
 	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT token FROM device_delivery_mechanisms WHERE installation_id='existing'").Scan(&token))
 	require.Equal(t, "kept-token", token)
@@ -306,17 +320,65 @@ func TestNotificationDurability_AppliesAndRevertsAfterLegacyRetirement(t *testin
 	require.NoError(t, database.Migrate(t.Context(), db))
 	assertSchemaVersion(t, db, 15)
 	require.NoError(t, database.RequireCurrentSchema(t.Context(), db))
-	assertRelationExists(t, db, "notification_envelopes")
-	assertRelationExists(t, db, "notification_recipient_receipts")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_envelopes")
+	assertQualifiedRelationExists(t, db, "notification_queue.notification_recipient_receipts")
 	assertRelationAbsent(t, db, "device_delivery_mechanisms")
 
 	require.NoError(t, database.MigrateUpTo(t.Context(), db, 14))
 	assertSchemaVersion(t, db, 14)
-	assertRelationAbsent(t, db, "notification_envelopes")
-	assertRelationAbsent(t, db, "notification_recipient_receipts")
+	assertNotificationQueueAbsent(t, db)
 	assertRelationAbsent(t, db, "device_delivery_mechanisms")
 
 	require.NoError(t, database.Migrate(t.Context(), db))
 	assertSchemaVersion(t, db, 15)
 	require.NoError(t, database.RequireCurrentSchema(t.Context(), db))
+}
+
+// The production shape: a dedicated, non-superuser migration owner that is
+// not the owner of schema public. Retirement leaves it without CREATE on
+// public, so 00015 must not need that privilege.
+func TestNotificationDurability_NonSuperuserOwnerAfterLegacyRetirement(t *testing.T) {
+	admin, err := database.CreateDB(testdb.TEST_DSN, 5*time.Second)
+	require.NoError(t, err)
+	role := fmt.Sprintf("migrator_%d", time.Now().UnixNano())
+	_, err = admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD 'migrator'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DROP ROLE IF EXISTS "`+role+`"`)
+		_ = admin.Close()
+	})
+
+	superuserDB := testdb.CreateEmptyTestDb(t)
+	var databaseName string
+	require.NoError(t, superuserDB.QueryRowContext(t.Context(), `SELECT current_database()`).Scan(&databaseName))
+	_, err = superuserDB.ExecContext(t.Context(), `GRANT CREATE, CONNECT ON DATABASE "`+databaseName+`" TO "`+role+`"; GRANT USAGE, CREATE ON SCHEMA public TO "`+role+`"`)
+	require.NoError(t, err)
+
+	migratorDSN, err := url.Parse(testdb.TEST_DSN)
+	require.NoError(t, err)
+	migratorDSN.User = url.UserPassword(role, "migrator")
+	migratorDSN.Path = "/" + databaseName
+	migrator, err := database.CreateDB(migratorDSN.String(), 5*time.Second)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = migrator.Close() })
+
+	require.NoError(t, database.MigrateUpTo(t.Context(), migrator, 14))
+	// Runbook retirement step: revoke every named non-owner CREATE on public.
+	_, err = superuserDB.ExecContext(t.Context(), `REVOKE CREATE ON SCHEMA public FROM "`+role+`"`)
+	require.NoError(t, err)
+	activateLegacyRoutingRetirement(t, migrator)
+	var canCreateInPublic bool
+	require.NoError(t, migrator.QueryRowContext(t.Context(), `SELECT has_schema_privilege(current_user, 'public', 'CREATE')`).Scan(&canCreateInPublic))
+	require.False(t, canCreateInPublic)
+
+	require.NoError(t, database.Migrate(t.Context(), migrator))
+	assertSchemaVersion(t, migrator, 15)
+	require.NoError(t, database.RequireCurrentSchema(t.Context(), migrator))
+	assertQualifiedRelationExists(t, migrator, "notification_queue.notification_envelopes")
+
+	require.NoError(t, database.MigrateUpTo(t.Context(), migrator, 14))
+	assertSchemaVersion(t, migrator, 14)
+	assertNotificationQueueAbsent(t, migrator)
+	require.NoError(t, database.Migrate(t.Context(), migrator))
+	assertSchemaVersion(t, migrator, 15)
 }
