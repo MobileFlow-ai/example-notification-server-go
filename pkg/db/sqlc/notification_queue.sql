@@ -98,5 +98,9 @@ SELECT pg_advisory_xact_lock(830178462);
 SELECT EXISTS (SELECT 1 FROM notification_queue.notification_envelopes WHERE listener = sqlc.arg(listener) AND message_key = sqlc.arg(message_key));
 
 -- name: NotificationPendingCapacity :one
-SELECT count(*)::bigint AS count, COALESCE(sum(octet_length(payload)),0)::bigint AS bytes
-FROM notification_queue.notification_envelopes WHERE status = 'pending';
+-- Retained oversize receipts cannot bypass the same admission quota. A
+-- rejection has no payload but reserves512B for its bounded metadata columns.
+SELECT count(*)::bigint AS count,
+       COALESCE(sum(octet_length(payload) + CASE WHEN failure_class = 'oversized' THEN 512 ELSE 0 END),0)::bigint AS bytes
+FROM notification_queue.notification_envelopes
+WHERE status = 'pending' OR failure_class = 'oversized';

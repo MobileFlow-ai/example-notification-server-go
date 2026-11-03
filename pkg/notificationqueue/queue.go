@@ -23,6 +23,10 @@ const MaxAttempts = 12
 const MaxEnvelopeBytes = 2 * 1024 * 1024
 const MaxRecipients = 10000
 
+// Rejected frames have no payload. Their bounded listener/key, fixed outcome,
+// timestamps and lease bookkeeping still consume admission/retention space.
+const rejectedEnvelopeMetadataBytes = 512
+
 type Store struct {
 	db      *sql.DB
 	queries *queries.Queries
@@ -44,16 +48,8 @@ func (s *Store) Enqueue(ctx context.Context, listener, key string, payload []byt
 	if (listener != "v3" && listener != "v4") || key == "" || len(key) > 128 || len(payload) == 0 {
 		return interfaces.ErrInvalidNotificationEnvelope
 	}
-	if len(payload) > MaxEnvelopeBytes {
-		// Keep only metadata so queue health reports the frame and a replay
-		// of the same frame stays deduplicated; never retain its bytes. A
-		// database failure here pauses admission like any other write.
-		if err := s.queries.RecordRejectedNotificationEnvelope(ctx, queries.RecordRejectedNotificationEnvelopeParams{Listener: listener, MessageKey: key, FailureClass: "oversized"}); err != nil {
-			return err
-		}
-		return interfaces.ErrNotificationEnvelopeTooLarge
-	}
-	return database.RunInTx(ctx, s.db, func(q *queries.Queries) error {
+	oversized := len(payload) > MaxEnvelopeBytes
+	err := database.RunInTx(ctx, s.db, func(q *queries.Queries) error {
 		if err := q.LockNotificationAdmission(ctx); err != nil {
 			return err
 		}
@@ -68,12 +64,29 @@ func (s *Store) Enqueue(ctx context.Context, listener, key string, payload []byt
 		if err != nil {
 			return err
 		}
-		if capacity.Count >= 100000 || capacity.Bytes+int64(len(payload)) > 512*1024*1024 {
+		chargedBytes := int64(len(payload))
+		if oversized {
+			chargedBytes = rejectedEnvelopeMetadataBytes
+		}
+		if capacity.Count >= 100000 || capacity.Bytes+chargedBytes > 512*1024*1024 {
 			return errors.New("notification durable queue at capacity")
+		}
+		if oversized {
+			// Admission and rejection share one lock, quota and commit. A
+			// failed or uncertain rejection commit never advances the stream.
+			return q.RecordRejectedNotificationEnvelope(ctx, queries.RecordRejectedNotificationEnvelopeParams{Listener: listener, MessageKey: key, FailureClass: "oversized"})
 		}
 		return q.EnqueueNotificationEnvelope(ctx, queries.EnqueueNotificationEnvelopeParams{Listener: listener, MessageKey: key, Payload: payload})
 	})
+	if err != nil {
+		return err
+	}
+	if oversized {
+		return interfaces.ErrNotificationEnvelopeTooLarge
+	}
+	return nil
 }
+
 func (s *Store) Claim(ctx context.Context, listener string) (*interfaces.NotificationEnvelope, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
