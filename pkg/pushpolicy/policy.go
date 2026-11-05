@@ -80,6 +80,10 @@ func exactPeriodHmacKey(req interfaces.SendRequest) ([]byte, bool) {
 		hmacKey.ThirtyDayPeriodsSinceEpoch != *expectedPeriod {
 		return nil, false
 	}
+	// The signed v1 secure-route contract admits only its 32-byte key format.
+	if req.Subscription.SecureRoute != nil && len(hmacKey.Key) != 32 {
+		return nil, false
+	}
 	return hmacKey.Key, true
 }
 

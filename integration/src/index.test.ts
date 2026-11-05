@@ -77,10 +77,16 @@ describe("notifications", () => {
     installationId: string,
     timeoutMs: number,
   ) => {
-    const result = await waitForNotification(installationId, timeoutMs).catch(
-      () => "timeout",
+    const timedOut = await waitForNotification(installationId, timeoutMs).then(
+      () => false,
+      (error: unknown) => {
+        if (error instanceof Error && error.message === `Timed out waiting for notification for ${installationId}`) {
+          return true;
+        }
+        throw error;
+      },
     );
-    expect(result).toEqual("timeout");
+    expect(timedOut).toBe(true);
   };
 
   const waitForConversationCount = async (
@@ -139,17 +145,12 @@ describe("notifications", () => {
       ],
     });
 
-    const notificationPromise = waitForNotification(alix.installationId, 30000);
-    // Bo creates a DM with alix, which sends a welcome to alix's installation
-    await bo.conversations.createDm(alix.inboxId);
-    const notification = await notificationPromise;
-
-    expect(notification.idempotency_key).toBeTypeOf("string");
-    expect(notification.message.content_topic).toEqual(alixWelcomeTopic);
-    expect(notification.message.message).toBeTypeOf("string");
-    expect(notification.subscription.is_silent).toBe(true);
-    expect(notification.installation.delivery_mechanism.token).toEqual("token");
-    expect(notification.message_context.message_type).toEqual("v3-welcome");
+    // A plaintext welcome subscription cannot authorize a pre-decryption push.
+    // Confirm the invite reached Alix through XMTP before checking the webhook.
+    const boDm = await bo.conversations.createDm(alix.inboxId);
+    const alixConversations = await waitForConversationCount(alix, 1, 15000);
+    expect(alixConversations.some((c) => c.id === boDm.id)).toBe(true);
+    await expectNoNotification(alix.installationId, 5000);
   });
 
   test("hmac keys", async () => {
@@ -174,10 +175,18 @@ describe("notifications", () => {
     expect(alixGroups.length).toEqual(1);
     const alixGroup = alixGroups[0];
 
+    const epochDurationMs = 30 * 24 * 60 * 60 * 1000;
+    const earliestEpoch = Math.floor(Date.now() / epochDurationMs);
     const hmacKeys = alix.conversations.hmacKeys();
+    const latestEpoch = Math.floor(Date.now() / epochDurationMs);
     expect(Object.keys(hmacKeys).length).toEqual(1);
     const conversationHmacKeys = hmacKeys[alixGroup.id];
     expect(conversationHmacKeys.length).toEqual(3);
+    expect(conversationHmacKeys.every((v) => v.key.byteLength === 42)).toBe(true);
+    const epochs = conversationHmacKeys.map((v) => Number(v.epoch)).sort((a, b) => a - b);
+    expect(epochs[1]).toBeGreaterThanOrEqual(earliestEpoch);
+    expect(epochs[1]).toBeLessThanOrEqual(latestEpoch);
+    expect(epochs).toEqual([epochs[1] - 1, epochs[1], epochs[1] + 1]);
 
     const matchingKeys = conversationHmacKeys.map((v) => ({
       thirtyDayPeriodsSinceEpoch: Number(v.epoch),
@@ -205,7 +214,8 @@ describe("notifications", () => {
     expect(notification.message.content_topic).toEqual(topic);
     expect(notification.message.message).toBeTypeOf("string");
     expect(notification.subscription.is_silent).toBe(false);
-    expect(notification.installation.delivery_mechanism.token).toEqual("token");
+    expect(notification.installation.id).toEqual(alix.installationId);
+    expect(notification.installation.delivery_mechanism.token === "token").toBe(true);
   });
 
   test("selective unsubscribe", async () => {
@@ -291,8 +301,9 @@ describe("notifications", () => {
     });
 
     // Both send messages — only bo's should be delivered
-    const notificationPromise = waitForNotification(alix.installationId, 15000);
     await alixGroup.sendText("From alix — should NOT be delivered");
+    await expectNoNotification(alix.installationId, 3000);
+    const notificationPromise = waitForNotification(alix.installationId, 15000);
     await boGroup.sendText("From bo — should be delivered");
 
     const notification = await notificationPromise;
@@ -306,28 +317,37 @@ describe("notifications", () => {
     const bo = await randomClient();
     const notifClient = createNotificationClient();
 
-    // Register alix and subscribe to welcome topic
     await notifClient.registerInstallation({
       installationId: alix.installationId,
       deliveryMechanism: {
         deliveryMechanismType: { value: "token", case: "apnsDeviceToken" },
       },
     });
-    const welcomeTopic = `/xmtp/mls/1/w-${alix.installationId}/proto`;
+    const boGroup = await bo.conversations.createGroup([alix.inboxId]);
+    const [alixGroup] = await waitForConversationCount(alix, 1, 15000);
+    const hmacKeys = alix.conversations.hmacKeys()[alixGroup.id];
     await notifClient.subscribeWithMetadata({
       installationId: alix.installationId,
-      subscriptions: [{ topic: welcomeTopic, isSilent: true }],
+      subscriptions: [{
+        topic: alixGroup.topic,
+        isSilent: false,
+        hmacKeys: hmacKeys.map((v) => ({
+          thirtyDayPeriodsSinceEpoch: Number(v.epoch),
+          key: Uint8Array.from(v.key),
+        })),
+      }],
     });
 
-    // Unregister alix
-    await notifClient.deleteInstallation({
-      installationId: alix.installationId,
-    });
+    await boGroup.sendText("Before unregister");
+    const before = await waitForNotification(alix.installationId, 15000);
+    expect(before.message.content_topic).toEqual(alixGroup.topic);
 
-    // Bo creates group with alix — should NOT trigger notification
-    await bo.conversations.createGroup([alix.inboxId]);
-
-    // Wait briefly and verify no notification arrived
+    await notifClient.deleteInstallation({ installationId: alix.installationId });
+    const afterId = await boGroup.sendText("After unregister");
+    await expect.poll(async () => {
+      await alixGroup.sync();
+      return (await alixGroup.messages()).some((m) => m.id === afterId);
+    }, { timeout: 10000 }).toBe(true);
     await expectNoNotification(alix.installationId, 5000);
   });
 });
