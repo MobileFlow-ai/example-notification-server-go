@@ -356,6 +356,47 @@ func Test_SubscribeWithMetadata_MalformedReplacementPreservesPriorKeys(t *testin
 	}}, fetchHmacKeys(t, ctx, db, INSTALLATION_ID, TEST_TOPIC))
 }
 
+func TestSDKHmacKeysRoundTripByPeriod(t *testing.T) {
+	ctx := t.Context()
+	svc := createService(t, testutils.CreateTestDb(t))
+	keys := []interfaces.HmacKey{
+		{ThirtyDayPeriodsSinceEpoch: 99, Key: validHmacKey(0x01)},
+		{ThirtyDayPeriodsSinceEpoch: 100, Key: bytes.Repeat([]byte{0x02}, 42)},
+		{ThirtyDayPeriodsSinceEpoch: 101, Key: bytes.Repeat([]byte{0x03}, 42)},
+	}
+	input := []interfaces.SubscriptionInput{{Topic: TEST_TOPIC, HmacKeys: keys}}
+	require.NoError(t, svc.SubscribeWithMetadata(ctx, INSTALLATION_ID, input))
+	input[0].HmacKeys = append(keys, interfaces.HmacKey{ThirtyDayPeriodsSinceEpoch: 102, Key: bytes.Repeat([]byte{0x04}, 42)})
+	require.ErrorContains(t, svc.SubscribeWithMetadata(ctx, INSTALLATION_ID, input), "too many")
+	for _, key := range keys {
+		routes, err := svc.GetSubscriptions(ctx, TEST_TOPIC, key.ThirtyDayPeriodsSinceEpoch)
+		require.NoError(t, err)
+		require.Len(t, routes, 1)
+		require.NotNil(t, routes[0].HmacKey)
+		require.Equal(t, key.ThirtyDayPeriodsSinceEpoch, routes[0].HmacKey.ThirtyDayPeriodsSinceEpoch)
+		require.True(t, bytes.Equal(key.Key, routes[0].HmacKey.Key))
+	}
+	routes, err := svc.GetSubscriptions(ctx, TEST_TOPIC, 102)
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	require.Nil(t, routes[0].HmacKey)
+}
+
+func TestValidateSubscriptionSDKKeyWindow(t *testing.T) {
+	var keys []interfaces.HmacKey
+	for period := 0; period < 4; period++ {
+		input := []interfaces.SubscriptionInput{{Topic: TEST_TOPIC, HmacKeys: keys}}
+		require.NoError(t, validateSubscriptionInputs(input))
+		keys = append(keys, interfaces.HmacKey{ThirtyDayPeriodsSinceEpoch: period, Key: bytes.Repeat([]byte{0xa5}, 42)})
+	}
+	input := []interfaces.SubscriptionInput{{Topic: TEST_TOPIC, HmacKeys: keys}}
+	require.ErrorContains(t, validateSubscriptionInputs(input), "too many")
+	for i := range keys {
+		keys[i].Key = validHmacKey(0x10)
+	}
+	require.NoError(t, validateSubscriptionInputs(input))
+}
+
 func Test_SubscribeWithMetadata_RejectsDuplicateKeyPeriods(t *testing.T) {
 	ctx := t.Context()
 	db := testutils.CreateTestDb(t)

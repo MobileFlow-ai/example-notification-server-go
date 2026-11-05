@@ -27,6 +27,27 @@ func TestHmacKeyIsValid(t *testing.T) {
 	}.IsValid())
 }
 
+func TestSenderHmacKeyAndDigestWidths(t *testing.T) {
+	data := []byte("sender-authentication-input")
+	for _, width := range []int{0, 31, 32, 33, 41, 42, 43, 64} {
+		key := bytes.Repeat([]byte{0xa5}, width)
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write(data)
+		digest := mac.Sum(nil)
+		context := MessageContext{HmacInputs: &data, SenderHmac: &digest}
+		supported := width == 32 || width == 42
+		require.Equal(t, supported, (HmacKey{ThirtyDayPeriodsSinceEpoch: 1, Key: key}).IsValid())
+		require.Equal(t, supported, context.IsSender(key))
+	}
+	key := bytes.Repeat([]byte{0xbc}, 42)
+	require.False(t, (HmacKey{ThirtyDayPeriodsSinceEpoch: -1, Key: key}).IsValid())
+	maxPeriod := int64(1<<31 - 1)
+	require.True(t, (HmacKey{ThirtyDayPeriodsSinceEpoch: int(maxPeriod), Key: key}).IsValid())
+	require.False(t, (HmacKey{ThirtyDayPeriodsSinceEpoch: int(maxPeriod + 1), Key: key}).IsValid())
+	wrongDigest := bytes.Repeat([]byte{0xde}, 42)
+	require.False(t, (MessageContext{HmacInputs: &data, SenderHmac: &wrongDigest}).HasValidSenderHmac())
+}
+
 func TestMessageContextRequiresWellFormedSenderHmac(t *testing.T) {
 	key := bytes.Repeat([]byte{0x01}, sha256.Size)
 	data := []byte("message")

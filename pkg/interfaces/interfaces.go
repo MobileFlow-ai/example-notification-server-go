@@ -217,7 +217,7 @@ type MessageContext struct {
 }
 
 func (m MessageContext) IsSender(hmacKey []byte) bool {
-	if !m.HasValidSenderHmac() || len(hmacKey) != sha256.Size {
+	if !m.HasValidSenderHmac() || !validSenderHmacKeyLength(len(hmacKey)) {
 		return false
 	}
 	hmacHash := hmac.New(sha256.New, hmacKey)
@@ -237,11 +237,19 @@ type HmacKey struct {
 	Key                        []byte
 }
 
+// LibXMTPSenderHmacKeySize is the HKDF output used for conversation sender HMACs.
+const LibXMTPSenderHmacKeySize = 42
+
+// Legacy bridge registrations use 32-byte keys. Both formats produce 32-byte MACs.
+func validSenderHmacKeyLength(size int) bool {
+	return size == 32 || size == LibXMTPSenderHmacKeySize
+}
+
 func (k HmacKey) IsValid() bool {
 	const maxDatabasePeriod = int64(1<<31 - 1)
 	return k.ThirtyDayPeriodsSinceEpoch >= 0 &&
 		int64(k.ThirtyDayPeriodsSinceEpoch) <= maxDatabasePeriod &&
-		len(k.Key) == sha256.Size
+		validSenderHmacKeyLength(len(k.Key))
 }
 
 type SubscriptionInput struct {

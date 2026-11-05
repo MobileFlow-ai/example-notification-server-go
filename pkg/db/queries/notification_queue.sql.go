@@ -225,8 +225,10 @@ func (q *Queries) NotificationEnvelopeExists(ctx context.Context, arg Notificati
 }
 
 const notificationPendingCapacity = `-- name: NotificationPendingCapacity :one
-SELECT count(*)::bigint AS count, COALESCE(sum(octet_length(payload)),0)::bigint AS bytes
-FROM notification_queue.notification_envelopes WHERE status = 'pending'
+SELECT count(*)::bigint AS count,
+       COALESCE(sum(octet_length(payload) + CASE WHEN failure_class = 'oversized' THEN 512 ELSE 0 END),0)::bigint AS bytes
+FROM notification_queue.notification_envelopes
+WHERE status = 'pending' OR failure_class = 'oversized'
 `
 
 type NotificationPendingCapacityRow struct {
@@ -234,6 +236,8 @@ type NotificationPendingCapacityRow struct {
 	Bytes int64
 }
 
+// Retained oversize receipts cannot bypass the same admission quota. A
+// rejection has no payload but reserves512B for its bounded metadata columns.
 func (q *Queries) NotificationPendingCapacity(ctx context.Context) (NotificationPendingCapacityRow, error) {
 	row := q.db.QueryRowContext(ctx, notificationPendingCapacity)
 	var i NotificationPendingCapacityRow

@@ -140,6 +140,11 @@ func validateSubscriptionInputs(subscriptions []interfaces.SubscriptionInput) er
 
 		periods := make(map[int]struct{}, len(sub.HmacKeys))
 		for _, key := range sub.HmacKeys {
+			// LibXMTP exports at most the previous, current and next periods.
+			// Existing all-32-byte registrations retain their legacy count semantics.
+			if len(key.Key) == interfaces.LibXMTPSenderHmacKeySize && len(sub.HmacKeys) > 3 {
+				return errors.New("subscription has too many SDK HMAC key periods")
+			}
 			if !key.IsValid() {
 				return errors.New("subscription HMAC key is malformed")
 			}

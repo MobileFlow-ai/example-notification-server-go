@@ -177,6 +177,31 @@ func TestAuthorizeDeliverySuppressesSelfOriginatedMessage(t *testing.T) {
 	require.False(t, AllowsDelivery(ctx, req))
 }
 
+func TestAuthorizeDeliveryWithLibXMTPSenderKey(t *testing.T) {
+	req := conversationRequest(boolPointer(true))
+	recipientKey := bytes.Repeat([]byte{0x19}, 42)
+	req.Subscription.HmacKey.Key = recipientKey
+	trueSenderKey := bytes.Repeat([]byte{0x20}, 42)
+	for _, tc := range []struct {
+		key         []byte
+		wantAllowed bool
+	}{
+		{recipientKey, false},
+		{trueSenderKey, true},
+	} {
+		mac := hmac.New(sha256.New, tc.key)
+		_, _ = mac.Write(*req.MessageContext.HmacInputs)
+		digest := mac.Sum(nil)
+		req.MessageContext.SenderHmac = &digest
+		ctx, allowed := AuthorizeDelivery(t.Context(), req)
+		require.Equal(t, tc.wantAllowed, allowed)
+		require.Equal(t, tc.wantAllowed, AllowsDelivery(ctx, req))
+	}
+	req.Subscription.SecureRoute = &interfaces.SecureRoute{}
+	_, allowed := AuthorizeDelivery(t.Context(), req)
+	require.False(t, allowed, "v1 secure routing still requires a 32-byte key")
+}
+
 func TestAuthorizeDeliveryFailsClosedWithoutUsableExactPeriodHmacState(t *testing.T) {
 	tests := []struct {
 		name   string

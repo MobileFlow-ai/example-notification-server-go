@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+readonly sqlc_version="v1.30.0"
+
+# Prefer the pinned installed generator so regeneration also works offline.
+if command -v sqlc >/dev/null 2>&1 && [[ "$(sqlc version)" == "$sqlc_version" ]]; then
+  exec sqlc generate
+fi
+
+exec go run "github.com/sqlc-dev/sqlc/cmd/sqlc@${sqlc_version}" generate
